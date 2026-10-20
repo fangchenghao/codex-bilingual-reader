@@ -7,9 +7,9 @@
 <p align="center">由 Codex 或 OpenAI 兼容 API 驱动的保排版中英论文翻译插件<br>Preserved-layout English/Chinese paper translation powered by Codex or OpenAI-compatible APIs</p>
 
 <p align="center">
-  <a href="https://github.com/Mengqi97/codex-bilingual-reader-for-zotero/releases/latest"><img src="https://img.shields.io/github/v/release/Mengqi97/codex-bilingual-reader-for-zotero" alt="Latest release"></a>
-  <a href="https://github.com/Mengqi97/codex-bilingual-reader-for-zotero/actions/workflows/ci.yml"><img src="https://github.com/Mengqi97/codex-bilingual-reader-for-zotero/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Mengqi97/codex-bilingual-reader-for-zotero" alt="MIT license"></a>
+  <a href="https://github.com/fangchenghao/codex-bilingual-reader/releases/latest"><img src="https://img.shields.io/github/v/release/fangchenghao/codex-bilingual-reader" alt="Latest release"></a>
+  <a href="https://github.com/fangchenghao/codex-bilingual-reader/actions/workflows/ci.yml"><img src="https://github.com/fangchenghao/codex-bilingual-reader/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/fangchenghao/codex-bilingual-reader" alt="MIT license"></a>
 </p>
 
 <p align="center"><a href="#中文">简体中文</a> · <a href="#english">English</a></p>
@@ -19,6 +19,8 @@
 ## 中文
 
 Codex Bilingual Reader 是一个适用于 Zotero 8/9/10 的 MIT 开源插件。它可通过本地已登录的 Codex CLI，或 OpenAI、DeepSeek 等 OpenAI 兼容 API，将 PDF 附件转换为**保留原排版的中英对照 PDF**。生成结果会作为独立的 Zotero 子附件自动导入，原始 PDF 始终不会被修改。
+
+> 本项目源自 [Mengqi97/codex-bilingual-reader-for-zotero](https://github.com/Mengqi97/codex-bilingual-reader-for-zotero)（MIT 许可）。上游已停止更新，当前由 [fangchenghao](https://github.com/fangchenghao) 维护，重点是维持对新版 Zotero 的兼容（本版适配 Zotero 10.0.x）。
 
 ### 核心功能
 
@@ -37,8 +39,8 @@ Codex Bilingual Reader 是一个适用于 Zotero 8/9/10 的 MIT 开源插件。�
 
 ### 安装
 
-1. 从[最新 GitHub Release](https://github.com/Mengqi97/codex-bilingual-reader-for-zotero/releases/latest)下载 `codex-bilingual-reader.xpi`。
-2. 在 Zotero 中打开**工具 → 附加组件**，选择**从文件安装附加组件…**，然后选择下载的 XPI。
+1. 从[最新 GitHub Release](https://github.com/fangchenghao/codex-bilingual-reader/releases/latest)下载 `codex-bilingual-reader.xpi`。
+2. 在 Zotero 中打开**工具 → 扩展和主题**（Zotero 9 及更早版本叫**附加组件**），点击右上角齿轮，选择**从文件安装附加组件…**，然后选择下载的 XPI。
 3. 打开**工具 → Codex 中英对照设置…**，点击**一键安装/修复 PDF 翻译环境**。首次运行会从官方 Release 下载并解压约 600 MB 的 PDFMathTranslate-next/BabelDOC 独立引擎，通常需要几分钟。
 4. 选择本地 Codex CLI 或 OpenAI 兼容 API，配置模型和凭据，并在翻译前点击**测试连接**。
 
@@ -110,6 +112,8 @@ npm run build
 
 Codex Bilingual Reader is an MIT-licensed plugin for Zotero 8/9/10. It converts PDF attachments into **preserved-layout English/Chinese PDFs** using either the locally authenticated Codex CLI or an OpenAI-compatible API such as OpenAI or DeepSeek. The generated PDF is imported automatically as a separate Zotero child attachment, and the original PDF is never modified.
 
+> Derived from [Mengqi97/codex-bilingual-reader-for-zotero](https://github.com/Mengqi97/codex-bilingual-reader-for-zotero) (MIT). The upstream project is no longer maintained; this fork is maintained by [fangchenghao](https://github.com/fangchenghao) with a focus on staying compatible with newer Zotero releases (this version targets Zotero 10.0.x).
+
 ### Core features
 
 - **Preserved-layout bilingual PDF** — retains figures, formulas, tables, selectable text, and page geometry while placing English and Chinese side by side.
@@ -127,8 +131,8 @@ English is preserved on the left and the translated, selectable Chinese page is 
 
 ### Installation
 
-1. Download `codex-bilingual-reader.xpi` from the [latest GitHub Release](https://github.com/Mengqi97/codex-bilingual-reader-for-zotero/releases/latest).
-2. In Zotero, open **Tools → Add-ons**, choose **Install Add-on From File…**, and select the downloaded XPI.
+1. Download `codex-bilingual-reader.xpi` from the [latest GitHub Release](https://github.com/fangchenghao/codex-bilingual-reader/releases/latest).
+2. In Zotero, open **Tools → Add-ons and Themes** (named **Add-ons** in Zotero 9 and earlier), click the gear icon, choose **Install Add-on From File…**, and select the downloaded XPI.
 3. Open **Tools → Codex 中英对照设置…** and click **一键安装/修复 PDF 翻译环境**. On first use, the plugin downloads and extracts the separate PDFMathTranslate-next/BabelDOC engine (about 600 MB) from its official release; this normally takes a few minutes.
 4. Select the locally authenticated Codex CLI or an OpenAI-compatible API, configure the model and credentials, and run **Test connection** before translating a paper.
 

@@ -4,7 +4,7 @@
   "version": "1.4.6",
   "description": "Create an English-Chinese parallel reading view from Zotero full text using the local Codex CLI.",
   "author": "Codex Bilingual Reader contributors",
-  "homepage_url": "https://github.com/Mengqi97/codex-bilingual-reader-for-zotero",
+  "homepage_url": "https://github.com/fangchenghao/codex-bilingual-reader",
   "icons": {
     "48": "content/icons/icon.svg",
     "96": "content/icons/icon.svg"
@@ -12,7 +12,7 @@
   "applications": {
     "zotero": {
       "id": "codex-bilingual-reader@geyi.net",
-      "update_url": "https://github.com/Mengqi97/codex-bilingual-reader-for-zotero/releases/latest/download/update.json",
+      "update_url": "https://github.com/fangchenghao/codex-bilingual-reader/releases/latest/download/update.json",
       "strict_min_version": "6.999",
       "strict_max_version": "10.*"
     }

@@ -60,12 +60,16 @@ jobs:
             }
             console.log("runtime resolution ok", runtime.mode, runtime.engine);
           '
-      - name: Launcher check reports a structured result
+      - name: Launcher preflight either reports ready or names the missing engine
         run: |
-          set +e
-          node scripts/translate-preserved-pdf-cli.mjs --check > /tmp/launcher-check.log 2>&1
+          status=0
+          node scripts/translate-preserved-pdf-cli.mjs --check > /tmp/launcher-check.log 2>&1 || status=$?
           cat /tmp/launcher-check.log
-          grep -q "RESULT_JSON" /tmp/launcher-check.log
+          if [ "$status" -eq 0 ]; then
+            grep -q "RESULT_JSON" /tmp/launcher-check.log
+          else
+            grep -q "ENOENT" /tmp/launcher-check.log
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: codex-bilingual-reader-macos

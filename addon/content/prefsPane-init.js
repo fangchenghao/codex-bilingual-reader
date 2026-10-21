@@ -182,7 +182,7 @@
       const button = document.getElementById("codex-bilingual-install-runtime");
       const status = document.getElementById("codex-bilingual-runtime-install-status");
       button.disabled = true;
-      status.textContent = "正在下载并安装官方 PDF 引擎（约 600 MB），请保持 Zotero 运行…";
+      status.textContent = "正在安装 PDF 翻译环境（Windows 约 600 MB，macOS/Linux 约 900 MB），请保持 Zotero 运行…";
       status.style.color = "var(--fill-secondary, #666)";
       try {
         const result = await Zotero.CodexBilingual.installPreservedPdfRuntime();

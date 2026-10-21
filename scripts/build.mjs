@@ -27,6 +27,7 @@ await cp(resolve(root, "src", "official-pricing.js"), resolve(staging, "content"
 await cp(resolve(root, "src", "main.js"), resolve(staging, "content", "scripts", "main.js"));
 const runtimeFiles = [
   "translate-preserved-pdf-cli.mjs",
+  "pdf-runtime-paths.mjs",
   "prepare-pdf2zh-runtime.mjs",
   "codex-cli-translator.py",
   "codex-batch-broker.py",
@@ -36,6 +37,7 @@ const runtimeFiles = [
   "flatten-pdf-for-viewer.py",
   "verify-preserved-pdf.py",
   "install-preserved-pdf-runtime.ps1",
+  "install-preserved-pdf-runtime.sh",
 ];
 for (const name of runtimeFiles) {
   await cp(resolve(root, "scripts", name), resolve(staging, "content", "runtime", name));

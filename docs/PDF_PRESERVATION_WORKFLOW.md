@@ -105,6 +105,16 @@ OPENAI_MODEL=<已验证的 Codex 模型，例如 gpt-5.4-mini>
 
 本项目中的 `scripts/run-preserved-pdf-smoke.mjs` 可在不接触用户 PDF 的前提下复现验证：它使用仓库内的双栏、公式、矢量图和表格样例，生成双语 PDF；`scripts/verify-preserved-pdf.py` 做结构核验。
 
+### 已验证的 macOS 运行细节
+
+macOS 走的是虚拟环境路线，而不是 Windows 的便携包：`scripts/install-preserved-pdf-runtime.sh` 固定安装 `pdf2zh_next==2.9.0`、`babeldoc==0.6.2` 与 `bitstring==4.3.1`。这三个版本不能随意上调：`babeldoc>=0.6.3` 要求 `pymupdf>=1.26.7`，而 `pdf2zh_next 2.9.0` 要求 `pymupdf<1.25.3`；`bitstring 5.x` 移除了 BabelDOC 依赖的 `BitStream`。
+
+解释器必须是 Python 3.10–3.13（`pdf2zh_next` 尚不支持 3.14）；有 `uv` 时安装器会自动取用 3.12。BabelDOC 把缓存硬编码在 `$HOME/.cache/babeldoc` 并忽略 XDG 变量，因此在 macOS 上**不要**为子进程替换 `HOME`，否则每次翻译都会重新下载约 340 MB 资产。
+
+国内网络下 `huggingface.co` 往往不可达，启动器在未显式设置 `HF_ENDPOINT` 时默认使用 `https://hf-mirror.com`；同时 `applyProxyDefaults()` 会在没有任何代理环境变量时设置 `NO_PROXY=*`，避免 httpx 继承一个并未监听的系统代理而全部超时。
+
+双语 PDF 的内侧裁剪量由像素扫描决定：`scripts/compact-dual-pdf.py` 只裁掉真实空白，遇到行首字形或图表边框就停止，因此默认值 80pt 不会再切掉译文首字。
+
 ### Job 与事件日志
 
 每个 PDF 在 Zotero 附件存储目录中维护一个 JSON job 文件，采用追加阶段而不是“运行中内存状态”：

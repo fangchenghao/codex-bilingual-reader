@@ -130,7 +130,9 @@ test("preserved PDF launcher supports a local preflight check", async () => {
   assert.match(runner, /process\.argv\[2\] === "--check"/);
   assert.match(runner, /CODEX_PDF_ENGINE/);
   assert.match(runner, /export-bilingual-artifacts\.mjs/);
-  assert.match(runner, /runtime", "pythonw\.exe/);
+  assert.match(runner, /resolvePdfRuntime\(\{ root, env: process\.env \}\)/);
+  assert.match(runner, /runtime\.mode === "portable"/);
+  assert.match(runner, /applyProxyDefaults/);
   assert.match(runner, /codex-cli-translator\.py/);
   assert.match(runner, /codex-batch-broker\.py/);
   assert.match(runner, /compact-dual-pdf\.py/);
@@ -142,8 +144,9 @@ test("preserved PDF launcher supports a local preflight check", async () => {
   assert.match(runner, /CODEX_PDF_BROKER_PORT/);
   assert.match(runner, /CODEX_PDF_CLI_TIMEOUT_SECONDS \|\| "300"/);
   assert.match(runner, /Math\.min\(300, Math\.max\(1,/);
-  assert.match(runner, /CODEX_PDF_QPS \|\| "64"/);
-  assert.match(runner, /CODEX_PDF_WORKERS \|\| "64"/);
+  assert.match(runner, /const defaultWorkers = process\.platform === "darwin" \? "32" : "64"/);
+  assert.match(runner, /CODEX_PDF_QPS \|\| defaultWorkers/);
+  assert.match(runner, /CODEX_PDF_WORKERS \|\| defaultWorkers/);
   assert.match(runner, /--clitranslator-command", `\\"\$\{bridgePython\}\\" \\"\$\{wrapper\}\\" --utf8-v2`/);
   assert.match(runner, /--disable-rich-text-translate/);
   assert.match(runner, /--skip-scanned-detection/);
@@ -157,7 +160,7 @@ test("preserved PDF launcher supports a local preflight check", async () => {
   assert.match(runner, /stable dual PDF but did not exit/);
   assert.match(runner, /codex-runner-result\.json/);
   assert.match(runner, /writeFile\(runnerResultPath/);
-  assert.match(runner, /const codexHome = process\.env\.CODEX_PDF_CODEX_HOME/);
+  assert.match(runner, /const codexHome = runtime\.codexHome/);
   assert.match(runner, /CODEX_PDF_CODEX_HOME: codexHome/);
   assert.match(runner, /status: "ready"/);
 });
@@ -203,7 +206,8 @@ test("preferences provide a verified one-click runtime installer", async () => {
     new URL("../scripts/translate-preserved-pdf-cli.mjs", import.meta.url), "utf8",
   );
   assert.match(pane, /codex-bilingual-install-runtime/);
-  assert.match(pane, /一键安装\/修复 PDF 翻译环境（约 600 MB）/);
+  assert.match(pane, /一键安装\/修复 PDF 翻译环境/);
+  assert.match(pane, /macOS\/Linux 创建 Python 虚拟环境/);
   assert.match(bridge, /installPreservedPdfRuntime\(\)/);
   assert.match(main, /async function installPreservedPdfRuntime\(\)/);
   assert.match(main, /content\/runtime\/\$\{name\}/);

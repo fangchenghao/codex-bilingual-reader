@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, parse, resolve } from "node:path";
 import { preparePdf2zhRuntime } from "./prepare-pdf2zh-runtime.mjs";
+import { applyProxyDefaults, resolvePdfRuntime } from "./pdf-runtime-paths.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const checking = process.argv[2] === "--check";
@@ -11,17 +12,18 @@ const requestedOutput = process.argv[3];
 if (!checking && (!source || !requestedOutput)) throw new Error("Usage: node scripts/translate-preserved-pdf-cli.mjs <input.pdf> <output-directory>");
 
 const output = requestedOutput ? resolve(requestedOutput) : "";
-const home = resolve(root, ".runtime", "pdf2zh-home");
-// Use PDFMathTranslate's official portable Windows bundle.  It ships the
-// matching BabelDOC runtime rather than mixing pip-installed dependencies.
-const portableRoot = resolve(root, ".tools", "pdf2zh-next-staging-2.9.0-babeldoc-0.6.4", "pdf2zh");
-const portableEngine = resolve(portableRoot, "pdf2zh.exe");
-const engine = process.env.CODEX_PDF_ENGINE || portableEngine;
+// Windows uses PDFMathTranslate's portable bundle; macOS/Linux use a venv that
+// the runtime installer provisions. Both expose the same engine + interpreter
+// contract, so everything below stays platform neutral.
+const runtime = await resolvePdfRuntime({ root, env: process.env });
+const home = runtime.home;
+const portableRoot = runtime.portableRoot;
+const engine = runtime.engine;
 // CLITranslator parses its command with POSIX shlex even on Windows. Forward
 // slashes plus explicit quotes keep this absolute path intact across that hop.
-// BabelDOC launches this bridge once per source fragment. Use its bundled
-// pythonw.exe so the bridge itself never creates a visible console window.
-const bridgePython = resolve(portableRoot, "runtime", "pythonw.exe").replace(/\\\\/g, "/");
+// On Windows use the bundled pythonw.exe so the bridge never opens a console
+// window; on macOS/Linux the venv interpreter is already windowless.
+const bridgePython = runtime.python.replace(/\\\\/g, "/");
 const wrapper = resolve(root, "scripts", "codex-cli-translator.py").replace(/\\\\/g, "/");
 const broker = resolve(root, "scripts", "codex-batch-broker.py").replace(/\\\\/g, "/");
 const compactDualPdfScript = resolve(root, "scripts", "compact-dual-pdf.py");
@@ -33,30 +35,39 @@ const requestedCliTimeout = Number(process.env.CODEX_PDF_CLI_TIMEOUT_SECONDS || 
 const cliTimeout = String(Math.min(300, Math.max(1, Number.isFinite(requestedCliTimeout) ? requestedCliTimeout : 300)));
 // These workers only feed the local broker. The broker limits actual Codex
 // concurrency independently while enough layout fragments gather per batch.
-const qps = process.env.CODEX_PDF_QPS || "64";
-const workers = process.env.CODEX_PDF_WORKERS || "64";
+// Apple Silicon saturates earlier than a desktop x86 machine, so default lower.
+const defaultWorkers = process.platform === "darwin" ? "32" : "64";
+const qps = process.env.CODEX_PDF_QPS || defaultWorkers;
+const workers = process.env.CODEX_PDF_WORKERS || defaultWorkers;
 const recoveryIdleMs = Math.max(60000, Number(process.env.CODEX_PDF_ENGINE_RECOVERY_IDLE_SECONDS || "90") * 1000);
-// Capture the real Windows account before isolating BabelDOC's HOME.  A
-// stale inherited CODEX_HOME can otherwise point into the temporary runtime.
-const codexHome = process.env.CODEX_PDF_CODEX_HOME
-  || (process.env.USERPROFILE ? resolve(process.env.USERPROFILE, ".codex") : process.env.CODEX_HOME);
-const env = {
+// Capture the real account home before isolating BabelDOC's HOME. A stale
+// inherited CODEX_HOME can otherwise point into the temporary runtime.
+const codexHome = runtime.codexHome;
+const env = applyProxyDefaults({
   ...process.env,
-  USERPROFILE: home, HOME: home,
+  // On Windows BabelDOC runs inside a throwaway HOME so nothing leaks into the
+  // real profile. On macOS/Linux we keep the real HOME on purpose: BabelDOC
+  // hard-codes its cache to $HOME/.cache/babeldoc, and reusing that cache means
+  // the ~340 MB of fonts/models are downloaded once instead of per run.
+  ...(process.platform === "win32" ? { USERPROFILE: home, HOME: home } : {}),
   CODEX_HOME: codexHome,
   CODEX_PDF_CODEX_HOME: codexHome,
   CODEX_PDF_CODEX: process.env.CODEX_PDF_CODEX || "codex",
-  HTTP_PROXY: process.env.HTTP_PROXY || "http://127.0.0.1:7897",
-  HTTPS_PROXY: process.env.HTTPS_PROXY || "http://127.0.0.1:7897",
-  ALL_PROXY: process.env.ALL_PROXY || "http://127.0.0.1:7897",
-  NO_PROXY: "127.0.0.1,localhost",
   PYTHONIOENCODING: "utf-8",
   PYTHONUTF8: "1",
   NO_COLOR: "1",
-  // DirectML is available on this machine but benchmarked slower than CPU for
-  // BabelDOC's dynamic layout model. Keep it opt-in.
+  // BabelDOC downloads its layout model and fonts from HuggingFace on first
+  // run. The Windows portable bundle ships them already, but a venv install
+  // fetches them, and huggingface.co is unreachable from mainland China.
+  ...(process.env.HF_ENDPOINT
+    ? { HF_ENDPOINT: process.env.HF_ENDPOINT }
+    : process.platform === "win32"
+      ? {}
+      : { HF_ENDPOINT: "https://hf-mirror.com" }),
+  // DirectML is available on some Windows machines but benchmarked slower than
+  // CPU for BabelDOC's dynamic layout model. Keep it opt-in.
   CODEX_PDF_LAYOUT_PROVIDER: process.env.CODEX_PDF_LAYOUT_PROVIDER || "cpu",
-};
+});
 if (checking) {
   await mkdir(home, { recursive: true });
   await access(engine);
@@ -72,7 +83,9 @@ if (checking) {
 }
 await mkdir(output, { recursive: true });
 await mkdir(home, { recursive: true });
-if (resolve(engine).toLowerCase() === portableEngine.toLowerCase()) await preparePdf2zhRuntime(portableRoot);
+// The DirectML/UTF-8 patches only apply to the Windows portable bundle; the venv
+// install is stock PyPI packages, so nothing needs rewriting there.
+if (runtime.mode === "portable") await preparePdf2zhRuntime(portableRoot);
 const runnerResultPath = resolve(output, "codex-runner-result.json");
 await rm(runnerResultPath, { force: true });
 env.CODEX_PDF_CHECKPOINT_FILE = resolve(output, "codex-fragment-checkpoint.jsonl");

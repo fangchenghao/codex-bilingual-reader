@@ -14,6 +14,7 @@
   const RUNTIME_DIRECTORY = "codex-bilingual-runtime";
   const RUNTIME_FILES = [
     "translate-preserved-pdf-cli.mjs",
+    "pdf-runtime-paths.mjs",
     "prepare-pdf2zh-runtime.mjs",
     "codex-cli-translator.py",
     "codex-batch-broker.py",
@@ -23,6 +24,7 @@
     "flatten-pdf-for-viewer.py",
     "verify-preserved-pdf.py",
     "install-preserved-pdf-runtime.ps1",
+    "install-preserved-pdf-runtime.sh",
   ];
   let appServer;
   let registeredPaneID;
@@ -240,6 +242,10 @@
     return String(getPref("preservedPdfLauncherPath", "")).trim();
   }
 
+  function runtimeRootPath() {
+    return PathUtils.join(PathUtils.profileDir || PathUtils.tempDir, RUNTIME_DIRECTORY);
+  }
+
   function dualInnerTrimPoints(value = getPref("dualInnerTrimPoints", 80)) {
     const parsed = Number(value);
     return Math.min(120, Math.max(0, Number.isFinite(parsed) ? Math.round(parsed) : 80));
@@ -256,10 +262,21 @@
     if (result !== picker.returnOK || !picker.file) return null;
     const root = picker.file;
     const launcher = PathUtils.join(root, "scripts", "translate-preserved-pdf-cli.mjs");
-    const engine = PathUtils.join(root, ".tools", "pdf2zh-next-staging-2.9.0-babeldoc-0.6.4", "pdf2zh", "pdf2zh.exe");
+    // Windows portable bundles ship pdf2zh.exe; a macOS/Linux checkout or
+    // installed runtime exposes the console script inside a virtualenv.
+    const engineCandidates = [
+      PathUtils.join(root, ".venv", "bin", "pdf2zh_next"),
+      PathUtils.join(root, "pdf2zh-mac", "venv", "bin", "pdf2zh_next"),
+      PathUtils.join(root, ".tools", "pdf2zh-next-staging-2.9.0-babeldoc-0.6.4", "pdf2zh", "pdf2zh.exe"),
+      PathUtils.join(root, ".tools", "pdf2zh-next", "Scripts", "pdf2zh_next.exe"),
+    ];
     const missing = [];
-    if (!(await IOUtils.exists(launcher))) missing.push("scripts\\translate-preserved-pdf-cli.mjs");
-    if (!(await IOUtils.exists(engine))) missing.push(".tools\\pdf2zh-next-staging-2.9.0-babeldoc-0.6.4\\pdf2zh\\pdf2zh.exe");
+    if (!(await IOUtils.exists(launcher))) missing.push(PathUtils.join("scripts", "translate-preserved-pdf-cli.mjs"));
+    let engine = "";
+    for (const candidate of engineCandidates) {
+      if (await IOUtils.exists(candidate)) { engine = candidate; break; }
+    }
+    if (!engine) missing.push(engineCandidates.map((candidate) => candidate.slice(root.length + 1)).join(" 或 "));
     if (missing.length) throw new Error(`所选目录不是已准备好的 Codex 双语 PDF 工作目录，缺少：${missing.join("；")}`);
     setPref("preservedPdfLauncherPath", launcher);
     setPref("preservedPdfEnginePath", engine);
@@ -268,10 +285,8 @@
   }
 
   async function installPreservedPdfRuntime() {
-    if (Services.appinfo.OS !== "WINNT") {
-      throw new Error("一键安装目前支持 Windows；其他系统请使用高级手动配置。");
-    }
-    const runtimeRoot = PathUtils.join(PathUtils.profileDir || PathUtils.tempDir, RUNTIME_DIRECTORY);
+    const windows = Services.appinfo.OS === "WINNT";
+    const runtimeRoot = runtimeRootPath();
     const scriptsDirectory = PathUtils.join(runtimeRoot, "scripts");
     await IOUtils.makeDirectory(scriptsDirectory, { createAncestors: true });
     for (const name of RUNTIME_FILES) {
@@ -279,16 +294,31 @@
       if (!response.ok) throw new Error(`无法读取插件内置运行脚本 ${name}（HTTP ${response.status}）。`);
       await IOUtils.write(PathUtils.join(scriptsDirectory, name), new Uint8Array(await response.arrayBuffer()));
     }
-    const systemRoot = Services.env.get("SystemRoot") || "C:\\Windows";
-    const powershell = PathUtils.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    if (!(await IOUtils.exists(powershell))) throw new Error(`未找到 Windows PowerShell：${powershell}`);
-    const installer = PathUtils.join(scriptsDirectory, "install-preserved-pdf-runtime.ps1");
-    const process = await Subprocess.call({
-      command: powershell,
-      arguments: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", installer, "-RuntimeRoot", runtimeRoot],
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    let process;
+    if (windows) {
+      const systemRoot = Services.env.get("SystemRoot") || "C:\\Windows";
+      const powershell = PathUtils.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+      if (!(await IOUtils.exists(powershell))) throw new Error(`未找到 Windows PowerShell：${powershell}`);
+      const installer = PathUtils.join(scriptsDirectory, "install-preserved-pdf-runtime.ps1");
+      process = await Subprocess.call({
+        command: powershell,
+        arguments: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", installer, "-RuntimeRoot", runtimeRoot],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    } else {
+      // macOS/Linux: a bash installer builds a venv from pinned PyPI packages.
+      // It needs a compatible interpreter (3.10-3.13) or uv; the script reports
+      // a readable error when neither is available.
+      const installer = PathUtils.join(scriptsDirectory, "install-preserved-pdf-runtime.sh");
+      if (!(await IOUtils.exists("/bin/bash"))) throw new Error("未找到 /bin/bash，无法安装 PDF 翻译环境。");
+      process = await Subprocess.call({
+        command: "/bin/bash",
+        arguments: [installer, "--runtime-root", runtimeRoot],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    }
     const stdoutPromise = readSubprocessStream(process.stdout);
     const stderrPromise = readSubprocessStream(process.stderr);
     const exitCode = subprocessExitCode(await process.wait());
@@ -302,7 +332,7 @@
     const result = JSON.parse(match.at(-1).slice("INSTALL_JSON=".length));
     setPref("preservedPdfLauncherPath", result.launcher);
     setPref("preservedPdfEnginePath", result.engine);
-    setPref("cliNodePath", result.node);
+    if (result.node) setPref("cliNodePath", result.node);
     await runPreservedPdfLauncher(["--check"], await preservedPdfEnvironment());
     return result;
   }
@@ -338,11 +368,20 @@
     const codexPath = codexScriptPath();
     const model = String(getPref("cliModel", "")).trim();
     const reasoning = String(getPref("preservedPdfReasoning", "low")).trim();
+    const windows = Services.appinfo.OS === "WINNT";
     if (engine) environment.CODEX_PDF_ENGINE = engine;
     if (engine) {
-      const portable = engine.toLowerCase().endsWith("\\pdf2zh\\pdf2zh.exe");
-      if (!portable) environment.CODEX_PDF_PYTHON = PathUtils.join(PathUtils.parent(engine), "python.exe");
+      // The Windows portable bundle puts pdf2zh.exe next to python.exe; a venv
+      // install puts bin/pdf2zh_next next to bin/python3.
+      const portable = /[\\/]pdf2zh[\\/]pdf2zh\.exe$/i.test(engine);
+      if (!portable) {
+        environment.CODEX_PDF_PYTHON = PathUtils.join(
+          PathUtils.parent(engine),
+          windows ? "python.exe" : "python3",
+        );
+      }
     }
+    environment.CODEX_PDF_RUNTIME_ROOT = runtimeRootPath();
     if (pdfBackend === "api") {
       const apiBaseURL = String(getPref("apiBaseURL", "")).trim();
       const apiModel = String(getPref("apiModel", "")).trim();
@@ -359,18 +398,15 @@
       if (reasoning) environment.CODEX_PDF_REASONING = reasoning;
     }
     environment.CODEX_PDF_DUAL_INNER_TRIM_PT = String(dualInnerTrimPoints());
-    const renderer = await firstExistingPath([
-      "D:\\Software\\texlive\\2026\\bin\\windows\\pdftoppm.exe",
-      "C:\\Program Files\\poppler\\Library\\bin\\pdftoppm.exe",
-    ]);
-    const textExtractor = await firstExistingPath([
-      "D:\\Software\\texlive\\2026\\bin\\windows\\pdftotext.exe",
-      "C:\\Program Files\\poppler\\Library\\bin\\pdftotext.exe",
-    ]);
-    const office = await firstExistingPath([
-      "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
-      "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe",
-    ]);
+    const renderer = await firstExistingPath(windows
+      ? ["D:\\Software\\texlive\\2026\\bin\\windows\\pdftoppm.exe", "C:\\Program Files\\poppler\\Library\\bin\\pdftoppm.exe"]
+      : ["/opt/homebrew/bin/pdftoppm", "/usr/local/bin/pdftoppm", "/usr/bin/pdftoppm"]);
+    const textExtractor = await firstExistingPath(windows
+      ? ["D:\\Software\\texlive\\2026\\bin\\windows\\pdftotext.exe", "C:\\Program Files\\poppler\\Library\\bin\\pdftotext.exe"]
+      : ["/opt/homebrew/bin/pdftotext", "/usr/local/bin/pdftotext", "/usr/bin/pdftotext"]);
+    const office = await firstExistingPath(windows
+      ? ["C:\\Program Files\\LibreOffice\\program\\soffice.exe", "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe"]
+      : ["/Applications/LibreOffice.app/Contents/MacOS/soffice", "/opt/homebrew/bin/soffice", "/usr/local/bin/soffice"]);
     if (renderer) environment.CODEX_PDF_PDFTOPPM = renderer;
     if (textExtractor) environment.CODEX_PDF_PDFTOTEXT = textExtractor;
     if (office) environment.CODEX_PDF_SOFFICE = office;
@@ -539,12 +575,42 @@
   async function nodeExecutablePath() {
     const configured = String(getPref("cliNodePath", "")).trim();
     const candidates = configured ? [configured] : [];
-    const pathEntries = String(Services.env.get("PATH") || "").split(";").filter(Boolean);
-    candidates.push(
-      ...pathEntries.map((entry) => PathUtils.join(entry, "node.exe")),
-      "C:\\Program Files\\nodejs\\node.exe",
-      "D:\\Software\\nodejs\\node.exe",
-    );
+    if (Services.appinfo.OS === "WINNT") {
+      const pathEntries = String(Services.env.get("PATH") || "").split(";").filter(Boolean);
+      candidates.push(
+        ...pathEntries.map((entry) => PathUtils.join(entry, "node.exe")),
+        "C:\\Program Files\\nodejs\\node.exe",
+        "D:\\Software\\nodejs\\node.exe",
+      );
+    } else {
+      // Zotero started from Finder inherits a minimal PATH, so Homebrew/nvm
+      // installs are invisible unless we probe their well-known locations.
+      const pathEntries = String(Services.env.get("PATH") || "").split(":").filter(Boolean);
+      candidates.push(
+        ...pathEntries.map((entry) => PathUtils.join(entry, "node")),
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+        "/usr/bin/node",
+      );
+      const home = Services.dirsvc.get("Home", Ci.nsIFile).path;
+      candidates.push(
+        PathUtils.join(home, ".volta", "bin", "node"),
+        PathUtils.join(home, ".local", "bin", "node"),
+        PathUtils.join(home, ".nvm", "current", "bin", "node"),
+      );
+      // nvm keeps versioned directories; newest usable one wins.
+      const nvmRoot = PathUtils.join(home, ".nvm", "versions", "node");
+      try {
+        if (await IOUtils.exists(nvmRoot)) {
+          const versions = (await IOUtils.getChildren(nvmRoot))
+            .map((entry) => PathUtils.filename(entry))
+            .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
+          candidates.push(...versions.map((version) => PathUtils.join(nvmRoot, version, "bin", "node")));
+        }
+      } catch (error) {
+        Zotero.logError(error);
+      }
+    }
     for (const candidate of candidates) {
       if (await IOUtils.exists(candidate)) return candidate;
     }

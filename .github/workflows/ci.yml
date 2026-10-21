@@ -49,17 +49,16 @@ jobs:
           test -x scripts/install-preserved-pdf-runtime.sh
       - name: Runtime resolution reports a stable result off Windows
         run: |
-          node -e '
-            import("./scripts/pdf-runtime-paths.mjs").then(({ resolvePdfRuntime }) => {
-              const runtime = resolvePdfRuntime({
-                root: process.cwd(),
-                env: { CODEX_PDF_ENGINE: "/opt/venv/bin/pdf2zh_next", CODEX_PDF_PYTHON: "/opt/venv/bin/python3" },
-              });
-              if (runtime.mode !== "custom" || !runtime.engine.endsWith("pdf2zh_next")) {
-                throw new Error("unexpected runtime resolution: " + JSON.stringify(runtime));
-              }
-              console.log("runtime resolution ok", runtime.mode, runtime.engine);
+          node --input-type=module -e '
+            import { resolvePdfRuntime } from "./scripts/pdf-runtime-paths.mjs";
+            const runtime = await resolvePdfRuntime({
+              root: process.cwd(),
+              env: { CODEX_PDF_ENGINE: "/opt/venv/bin/pdf2zh_next", CODEX_PDF_PYTHON: "/opt/venv/bin/python3" },
             });
+            if (runtime.mode !== "custom" || !runtime.engine.endsWith("pdf2zh_next")) {
+              throw new Error("unexpected runtime resolution: " + JSON.stringify(runtime));
+            }
+            console.log("runtime resolution ok", runtime.mode, runtime.engine);
           '
       - name: Launcher check reports a structured result
         run: |

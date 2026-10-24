@@ -90,15 +90,24 @@ PDFMathTranslate-next/BabelDOC 使用 AGPL 许可证，因此它由用户主动�
 
 ### 开发
 
-环境要求：Node.js 20+、Python 3、Zotero 8+。
+环境要求：Node.js 20+、Python 3.10+（`npm test` 中的 Python 用例需要）、Zotero 8+。以下命令在 Windows（Git Bash / PowerShell 均可）、macOS 和 Linux 上一致。
 
-```powershell
-npm run check
-npm test
-npm run build
+```bash
+npm ci          # 安装固定依赖
+npm run check   # 语法与清单校验
+npm test        # Node 测试 + Python 批量翻译器测试
+npm run build   # 产出分发包
 ```
 
 构建产物位于 `build/codex-bilingual-reader.xpi`。
+
+只验证保排版启动器、不翻译正文：
+
+```bash
+node scripts/translate-preserved-pdf-cli.mjs --check
+```
+
+若本机还没有 PDF 引擎，可先准备运行时再重跑上面的预检：macOS/Linux 用 `bash scripts/install-preserved-pdf-runtime.sh --runtime-root "$PWD/.runtime/pdf2zh"`，Windows 用 `scripts/install-preserved-pdf-runtime.ps1`。
 
 ### 致谢与参考项目
 
@@ -188,15 +197,24 @@ On Windows, the launcher sends document fragments through stdin to the configure
 
 ### Development
 
-Requirements: Node.js 20+, Python 3, and Zotero 8+.
+Requirements: Node.js 20+, Python 3.10+ (needed by the Python cases in `npm test`), and Zotero 8+. The commands below are identical on Windows (Git Bash or PowerShell), macOS, and Linux.
 
-```powershell
-npm run check
-npm test
-npm run build
+```bash
+npm ci          # install pinned dependencies
+npm run check   # syntax and manifest checks
+npm test        # Node tests + Python batch-translator tests
+npm run build   # produce the distributable
 ```
 
 The distributable is `build/codex-bilingual-reader.xpi`.
+
+To validate the preserved-layout launcher without translating any content:
+
+```bash
+node scripts/translate-preserved-pdf-cli.mjs --check
+```
+
+If the machine has no PDF engine yet, provision the runtime first and rerun the preflight: `bash scripts/install-preserved-pdf-runtime.sh --runtime-root "$PWD/.runtime/pdf2zh"` on macOS/Linux, or `scripts/install-preserved-pdf-runtime.ps1` on Windows.
 
 ### Acknowledgements and references
 

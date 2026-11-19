@@ -1,6 +1,9 @@
 /* global Zotero, window, document */
 (function () {
   function load() {
+    const pane = document.getElementById("codex-bilingual-preferences");
+    if (!pane || pane.dataset.initialized) return;
+    pane.dataset.initialized = "true";
     const prefix = "extensions.zotero.codex-bilingual-reader.";
     const get = (key, fallback = "") => {
       try { return Zotero.Prefs.get(prefix + key, true) ?? fallback; } catch (_error) { return fallback; }
@@ -79,6 +82,7 @@
       document.getElementById("codex-bilingual-app-server-settings").hidden =
         document.getElementById("codex-bilingual-backend")?.value !== "app-server";
       document.getElementById("codex-bilingual-preserved-pdf-settings").hidden = false;
+      document.getElementById("codex-bilingual-pdf-reasoning-row").hidden = isAPI;
     };
     const refreshPreservedPdfModelSource = async () => {
       const status = document.getElementById("codex-bilingual-preserved-pdf-model-source");
@@ -178,23 +182,56 @@
     document.getElementById("codex-bilingual-app-server-reasoning")?.addEventListener("command", () => {
       set("appServerReasoningEffort", document.getElementById("codex-bilingual-app-server-reasoning").value);
     });
+    const runtimeStatus = document.getElementById("codex-bilingual-runtime-install-status");
+    let runtimeStatusVersion = 0;
+    const checkRuntime = async () => {
+      const version = ++runtimeStatusVersion;
+      try {
+        await Zotero.CodexBilingual.checkPreservedPdfRuntime();
+        if (version !== runtimeStatusVersion) return;
+        runtimeStatus.textContent = "PDF 环境已就绪，可以翻译。";
+        runtimeStatus.removeAttribute("tooltiptext");
+        runtimeStatus.style.color = "var(--color-green-50, #238636)";
+      } catch (error) {
+        if (version !== runtimeStatusVersion) return;
+        runtimeStatus.textContent = "PDF 环境尚未就绪。点击上方按钮安装或修复。";
+        runtimeStatus.setAttribute("tooltiptext", error.message || String(error));
+        runtimeStatus.style.color = "var(--fill-secondary, #666)";
+      }
+    };
+    for (const id of ["codex-bilingual-preserved-pdf-launcher", "codex-bilingual-preserved-pdf-engine", "codex-bilingual-node-path"]) {
+      document.getElementById(id).addEventListener("change", checkRuntime);
+    }
+    const showRuntimePaths = (result) => {
+      document.getElementById("codex-bilingual-preserved-pdf-launcher").value = result.launcher;
+      document.getElementById("codex-bilingual-preserved-pdf-engine").value = result.engine;
+      document.getElementById("codex-bilingual-node-path").value = result.node;
+    };
     document.getElementById("codex-bilingual-install-runtime")?.addEventListener("command", async () => {
       const button = document.getElementById("codex-bilingual-install-runtime");
       const status = document.getElementById("codex-bilingual-runtime-install-status");
       button.disabled = true;
-      status.textContent = "正在安装 PDF 翻译环境（Windows 约 600 MB，macOS/Linux 约 900 MB），请保持 Zotero 运行…";
+      ++runtimeStatusVersion;
+      status.removeAttribute("tooltiptext");
+      const startedAt = Date.now();
+      let currentStage = "正在检查安装环境…";
+      const renderStage = () => {
+        const seconds = Math.floor((Date.now() - startedAt) / 1000);
+        status.textContent = seconds ? `${currentStage}（已用 ${seconds} 秒）` : currentStage;
+      };
+      renderStage();
+      const timer = setInterval(renderStage, 1000);
       status.style.color = "var(--fill-secondary, #666)";
       try {
-        const result = await Zotero.CodexBilingual.installPreservedPdfRuntime();
-        document.getElementById("codex-bilingual-preserved-pdf-launcher").value = result.launcher;
-        document.getElementById("codex-bilingual-preserved-pdf-engine").value = result.engine;
-        document.getElementById("codex-bilingual-node-path").value = result.node;
+        const result = await Zotero.CodexBilingual.installPreservedPdfRuntime((stage) => { currentStage = stage; renderStage(); });
+        showRuntimePaths(result);
         status.textContent = "安装完成，路径已填写并通过本地预检。";
         status.style.color = "var(--color-green-50, #238636)";
       } catch (error) {
         status.textContent = `安装失败：${error.message || String(error)}`;
         status.style.color = "var(--color-red-60, #c01c28)";
       } finally {
+        clearInterval(timer);
         button.disabled = false;
       }
     });
@@ -210,8 +247,8 @@
           status.textContent = "已取消。";
           return;
         }
-        document.getElementById("codex-bilingual-preserved-pdf-launcher").value = result.launcher;
-        document.getElementById("codex-bilingual-preserved-pdf-engine").value = result.engine;
+        showRuntimePaths(result);
+        void checkRuntime();
         status.textContent = "已自动配置并完成保真 PDF 预检。";
         status.style.color = "var(--color-green-50, #238636)";
       } catch (error) {
@@ -316,17 +353,17 @@
       }
     });
     updateVisibility();
+    void checkRuntime();
     void refreshPreservedPdfModelSource();
     if (officialPriceSource) officialPriceStatus("已保存上次使用的官方价格来源。");
   }
   globalThis.CodexBilingualPrefs = { load };
-  let attempts = 0;
-  function bridge() {
-    if (typeof Zotero !== "undefined" && document.getElementById("codex-bilingual-backend")) {
-      load();
-      return;
-    }
-    if (attempts++ < 60) setTimeout(bridge, 50);
-  }
-  bridge();
+  // Zotero loads pane scripts before inserting the fragment, then dispatches
+  // a non-bubbling load event on its root. A slow preferences window is valid.
+  if (document.getElementById("codex-bilingual-preferences")) load();
+  else document.addEventListener("load", function paneLoaded(event) {
+    if (event.target.id !== "codex-bilingual-preferences") return;
+    document.removeEventListener("load", paneLoaded, true);
+    load();
+  }, true);
 }());

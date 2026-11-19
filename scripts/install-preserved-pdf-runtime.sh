@@ -33,111 +33,138 @@ if [ -z "$RUNTIME_ROOT" ]; then
   exit 2
 fi
 
+mkdir -p "$RUNTIME_ROOT"
+RUNTIME_ROOT="$(cd "$RUNTIME_ROOT" && pwd)"
 VENV="$RUNTIME_ROOT/.venv"
-LOG_PREFIX="[codex-bilingual]"
+TOOLS="$RUNTIME_ROOT/.tools"
+# Finder and Linux desktop launchers do not source interactive shell profiles.
+export PATH="${PATH:-/usr/bin:/bin}:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin"
+stage() { echo "STAGE=$*"; }
+fail() { echo "[codex-bilingual] $*" >&2; exit 1; }
+mkdir -p "$TOOLS"
+STAGING="$(mktemp -d "$TOOLS/.setup-XXXXXX")"
+trap 'rm -rf "$STAGING"' EXIT
 
-log() { echo "$LOG_PREFIX $*"; }
-fail() { echo "$LOG_PREFIX ERROR: $*" >&2; exit 1; }
-
-# A system proxy pointed at a stopped client turns every download into a
-# timeout. Only override when the user has not configured a proxy explicitly.
-if [ -z "${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}${http_proxy:-}${https_proxy:-}${all_proxy:-}" ]; then
-  export NO_PROXY="*"
-fi
-# HuggingFace is unreachable from mainland China; BabelDOC pulls its layout
-# model from there on first run.
-export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
-
-python_minor_version() {
-  "$1" -c 'import sys; print(sys.version_info.major, sys.version_info.minor)' 2>/dev/null || true
+# Extract only the named executable after verifying the official archive.
+install_tool() {
+  local tool="$1" os arch platform target url member digest destination actual wheel_tag
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$arch" in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=x64 ;; esac
+  case "$os" in Darwin) platform=darwin ;; Linux) platform=linux ;; *) fail "请在此平台预先安装 ${tool}。" ;; esac
+  case "$tool/$platform/$arch" in
+    node/darwin/arm64) digest=8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d ;;
+    node/darwin/x64)   digest=d1b5e999db158c62fe8f7267a4476b035d8bd93b1a605bac24a3f0dd166e3316 ;;
+    node/linux/arm64)  digest=d28c8a5bf0a808f0ed434a1dce8c54ae98f0371c0bd86ac58abc613f73e6643f ;;
+    node/linux/x64)    digest=f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4 ;;
+    uv/darwin/arm64)   wheel_tag=macosx_11_0_arm64; digest=66c512266d633bef48384a1f53003f41f2a8e7b36fe6e7fbfd3e0fd52d96fa63 ;;
+    uv/darwin/x64)     wheel_tag=macosx_10_12_x86_64; digest=c16ed11e013557536b3e60065f1b912f6407bd6518e041b961e23ef9e6b4fbf5 ;;
+    uv/linux/arm64)    wheel_tag=manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64; digest=5435c5ce14a56431208ca0996416d310f1598e8c2c8ba707688985a16bb82dbe ;;
+    uv/linux/x64)      wheel_tag=manylinux_2_17_x86_64.manylinux2014_x86_64; digest=d7f459fe4fd247d830351c75686d3996ace3c6f3f728eb0e85a30b7ada0cef19 ;;
+    *) fail "请在 $os $arch 上预先安装 $tool，再点击修复。" ;;
+  esac
+  if [ "$tool" = node ]; then
+    target="node-v24.19.0-$platform-$arch"
+    url="https://nodejs.org/dist/v24.19.0/$target.tar.gz"
+    member="$target/bin/node"
+    destination="$TOOLS/node/bin/node"
+  else
+    url="https://files.pythonhosted.org/packages/py3/u/uv/uv-0.13.9-py3-none-$wheel_tag.whl"
+    member="uv-0.13.9.data/scripts/uv"
+    destination="$TOOLS/bin/uv"
+  fi
+  stage "正在下载并校验 ${tool}…"
+  curl -fsSL --retry 2 --connect-timeout 15 --speed-time 45 --speed-limit 1024 -o "$STAGING/archive" "$url" || fail "下载 $tool 失败，请检查 $url 的网络连接。"
+  if command -v sha256sum >/dev/null; then
+    actual="$(sha256sum < "$STAGING/archive")"
+  else
+    actual="$(shasum -a 256 < "$STAGING/archive")"
+  fi
+  [ "${actual%% *}" = "$digest" ] || fail "$tool 下载校验失败，请再次点击修复。"
+  if [ "$tool" = uv ]; then
+    if command -v unzip >/dev/null; then
+      unzip -p "$STAGING/archive" "$member" > "$STAGING/uv"
+    elif command -v python3 >/dev/null; then
+      python3 -c 'import sys, zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))' "$STAGING/archive" "$member" > "$STAGING/uv"
+    else
+      fail "解压 uv 需要 unzip 或 Python 3。"
+    fi
+    member=uv
+    chmod 755 "$STAGING/uv"
+  else
+    tar -xzf "$STAGING/archive" -C "$STAGING" "$member"
+  fi
+  mkdir -p "$(dirname "$destination")"
+  mv -f "$STAGING/$member" "$destination"
 }
 
-python_is_supported() {
-  local version major minor
-  version="$(python_minor_version "$1")" || return 1
-  [ -n "$version" ] || return 1
-  major="${version%% *}"
-  minor="${version##* }"
-  [ "$major" = "3" ] || return 1
-  [ "$minor" -ge "$MIN_PYTHON_MINOR" ] 2>/dev/null || return 1
-  [ "$minor" -le "$MAX_PYTHON_MINOR" ] 2>/dev/null || return 1
-  return 0
-}
-
-PYTHON=""
-for candidate in \
-  /opt/homebrew/bin/python3.13 \
-  /opt/homebrew/bin/python3.12 \
-  /opt/homebrew/bin/python3.11 \
-  /opt/homebrew/bin/python3.10 \
-  /usr/local/bin/python3.13 \
-  /usr/local/bin/python3.12 \
-  /usr/local/bin/python3.11 \
-  /usr/local/bin/python3.10 \
-  /usr/bin/python3 \
-  python3.12 python3.13 python3.11 python3.10 python3; do
-  if command -v "$candidate" >/dev/null 2>&1 && python_is_supported "$candidate"; then
-    PYTHON="$candidate"
+stage "正在寻找 Node.js 和 PDF 引擎…"
+NODE=""
+for candidate in "${CBR_NODE:-}" "$TOOLS/node/bin/node" "$(command -v node || true)" \
+  "$HOME/.volta/bin/node" "$HOME/.nvm/current/bin/node" "$HOME"/.nvm/versions/node/*/bin/node; do
+  if [ -x "$candidate" ] && "$candidate" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' 2>/dev/null; then
+    NODE="$candidate"
     break
   fi
 done
-
-log "runtime root: $RUNTIME_ROOT"
-mkdir -p "$RUNTIME_ROOT"
-
-install_with_uv() {
-  local uv="$1"
-  log "using uv at $uv"
-  "$uv" venv --python 3.12 --allow-existing "$VENV" || return 1
-  "$uv" pip install --python "$VENV/bin/python" \
-    "pdf2zh_next==${PDF2ZH_VERSION}" \
-    "babeldoc==${BABELDOC_VERSION}" \
-    "bitstring==${BITSTRING_VERSION}" || return 1
-}
-
-install_with_pip() {
-  local python="$1"
-  log "using python at $python ($(python_minor_version "$python"))"
-  "$python" -m venv "$VENV" || fail "无法创建虚拟环境（$python -m venv）"
-  "$VENV/bin/python" -m pip install --upgrade pip >/dev/null 2>&1 || true
-  "$VENV/bin/python" -m pip install \
-    "pdf2zh_next==${PDF2ZH_VERSION}" \
-    "babeldoc==${BABELDOC_VERSION}" \
-    "bitstring==${BITSTRING_VERSION}" || return 1
-}
-
-installed=0
-if command -v uv >/dev/null 2>&1; then
-  log "installing pdf2zh_next ${PDF2ZH_VERSION} + babeldoc ${BABELDOC_VERSION} with uv"
-  if install_with_uv "$(command -v uv)"; then installed=1; fi
-fi
-if [ "$installed" -ne 1 ]; then
-  if [ -z "$PYTHON" ]; then
-    fail "未找到 Python 3.${MIN_PYTHON_MINOR}-3.${MAX_PYTHON_MINOR}。请安装 Homebrew Python（brew install python@3.12）或 uv（brew install uv）后重试。"
-  fi
-  log "installing pdf2zh_next ${PDF2ZH_VERSION} + babeldoc ${BABELDOC_VERSION} with pip"
-  install_with_pip "$PYTHON" || fail "依赖安装失败，请检查网络后重试。"
-fi
-
-[ -x "$VENV/bin/pdf2zh_next" ] || fail "安装完成但未找到 $VENV/bin/pdf2zh_next"
-"$VENV/bin/python" -c "from bitstring import BitStream; import pdf2zh_next, babeldoc" \
-  || fail "依赖校验失败：pdf2zh_next / babeldoc / bitstring 无法导入"
-
-log "engine: $VENV/bin/pdf2zh_next"
-log "python: $VENV/bin/python"
-
-NODE=""
-for candidate in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node "$HOME/.volta/bin/node" "$HOME/.nvm/current/bin/node"; do
-  if [ -x "$candidate" ]; then NODE="$candidate"; break; fi
-done
-if [ -z "$NODE" ] && command -v node >/dev/null 2>&1; then NODE="$(command -v node)"; fi
 if [ -z "$NODE" ]; then
-  echo "$LOG_PREFIX WARNING: 未找到 node，稍后请在设置中手动指定 Node 路径。" >&2
+  install_tool node
+  NODE="$TOOLS/node/bin/node"
+  "$NODE" --version >/dev/null || fail "Node.js 无法运行。请安装适合此系统的 Node.js 20+ 后重试。"
 fi
 
-# The add-on parses a single INSTALL_JSON line, mirroring the PowerShell installer.
-printf 'INSTALL_JSON={"status":"ready","launcher":"%s","engine":"%s","python":"%s","node":"%s"}\n' \
-  "$RUNTIME_ROOT/scripts/translate-preserved-pdf-cli.mjs" \
-  "$VENV/bin/pdf2zh_next" \
-  "$VENV/bin/python" \
-  "$NODE"
+engine_ready() {
+  [ -x "$VENV/bin/pdf2zh_next" ] && "$VENV/bin/python" - "$PDF2ZH_VERSION" "$BABELDOC_VERSION" "$BITSTRING_VERSION" <<'PY' 2>/dev/null
+import sys
+from importlib.metadata import version
+import pymupdf, babeldoc, pdf2zh_next
+from bitstring import BitStream
+sys.exit([version(name) for name in ("pdf2zh_next", "babeldoc", "bitstring")] != sys.argv[1:])
+PY
+}
+
+if ! engine_ready; then
+  requirements=("pdf2zh_next==$PDF2ZH_VERSION" "babeldoc==$BABELDOC_VERSION" "bitstring==$BITSTRING_VERSION")
+  PYTHON=""
+  for candidate in "$VENV/bin/python" python3.12 python3.11 python3.13 python3.10 python3; do
+    if command -v "$candidate" >/dev/null && "$candidate" -c "import sys; sys.exit(not ((3, $MIN_PYTHON_MINOR) <= sys.version_info[:2] <= (3, $MAX_PYTHON_MINOR)))" 2>/dev/null; then
+      PYTHON="$(command -v "$candidate")"
+      break
+    fi
+  done
+  UV="$(command -v uv || true)"
+  if [ -z "$UV" ] && [ -x "$TOOLS/bin/uv" ]; then UV="$TOOLS/bin/uv"; fi
+  if [ -z "$UV" ] && { [ -z "$PYTHON" ] || ! "$PYTHON" -m venv "$VENV"; }; then
+    install_tool uv
+    UV="$TOOLS/bin/uv"
+  fi
+  if [ -n "$UV" ]; then
+    stage "正在准备 Python 虚拟环境…"
+    if [ -z "$PYTHON" ]; then
+      PYTHON="$("$UV" python find --no-python-downloads 3.12 2>/dev/null || true)"
+      if [ -z "$PYTHON" ]; then
+        export UV_PYTHON_INSTALL_DIR="$TOOLS/python" UV_PYTHON_BIN_DIR="$TOOLS/bin"
+        PYTHON=3.12
+      fi
+    fi
+    "$UV" venv --python "$PYTHON" --allow-existing "$VENV"
+    stage "正在安装 PDF 引擎和排版依赖，首次下载可能需要几分钟…"
+    "$UV" pip install --python "$VENV/bin/python" "${requirements[@]}"
+  else
+    stage "正在使用 pip 安装 PDF 引擎和排版依赖…"
+    "$VENV/bin/python" -m pip install "${requirements[@]}"
+  fi
+  engine_ready || fail "依赖校验失败。请检查上方安装错误后重试。"
+fi
+
+stage "正在验证安装路径…"
+"$VENV/bin/python" - "$RUNTIME_ROOT" "$NODE" <<'PY'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+print("INSTALL_JSON=" + json.dumps({
+    "status": "ready", "launcher": str(root / "scripts/translate-preserved-pdf-cli.mjs"),
+    "engine": str(root / ".venv/bin/pdf2zh_next"), "python": str(root / ".venv/bin/python"),
+    "node": sys.argv[2],
+}))
+PY

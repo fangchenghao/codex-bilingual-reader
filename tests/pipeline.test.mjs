@@ -59,7 +59,7 @@ test("Codex subprocess handling accepts Gecko process status objects", async () 
   assert.match(source, /environmentAppend: Boolean\(environment\)/);
   assert.match(source, /command: node/);
   assert.match(source, /stderr: "pipe"/);
-  assert.match(source, /async function readSubprocessStream\(stream\)/);
+  assert.match(source, /async function readSubprocessStream\(stream, onChunk\)/);
   assert.match(source, /const stderrPromise = readSubprocessStream\(process\.stderr\)/);
   assert.match(source, /async function startAppServer\(\)/);
   assert.match(source, /arguments: \["app-server"\]/);
@@ -133,7 +133,7 @@ test("preserved PDF launcher supports a local preflight check", async () => {
   assert.match(runner, /resolvePdfRuntime\(\{ root, env: process\.env \}\)/);
   assert.match(runner, /runtime\.mode === "portable"/);
   assert.match(runner, /applyProxyDefaults/);
-  assert.match(runner, /codex-cli-translator\.py/);
+  assert.match(runner, /pdf_layout\.py/);
   assert.match(runner, /codex-batch-broker\.py/);
   assert.match(runner, /compact-dual-pdf\.py/);
   assert.match(runner, /CODEX_PDF_DUAL_INNER_TRIM_PT \|\| "80"/);
@@ -141,13 +141,13 @@ test("preserved PDF launcher supports a local preflight check", async () => {
   assert.match(runner, /prepare-pdf2zh-runtime\.mjs/);
   assert.match(runner, /preparePdf2zhRuntime/);
   assert.match(runner, /CODEX_PDF_PAGES/);
-  assert.match(runner, /CODEX_PDF_BROKER_PORT/);
+  assert.match(runner, /--openai-compatible-base-url/);
   assert.match(runner, /CODEX_PDF_CLI_TIMEOUT_SECONDS \|\| "300"/);
-  assert.match(runner, /Math\.min\(300, Math\.max\(1,/);
+  assert.match(runner, /"--ignore-cache"/);
   assert.match(runner, /const defaultWorkers = process\.platform === "darwin" \? "32" : "64"/);
   assert.match(runner, /CODEX_PDF_QPS \|\| defaultWorkers/);
   assert.match(runner, /CODEX_PDF_WORKERS \|\| defaultWorkers/);
-  assert.match(runner, /--clitranslator-command", `\\"\$\{bridgePython\}\\" \\"\$\{wrapper\}\\" --utf8-v2`/);
+  assert.match(runner, /"--openaicompatible"/);
   assert.match(runner, /--disable-rich-text-translate/);
   assert.match(runner, /--skip-scanned-detection/);
   assert.match(runner, /if \(translationSide === "left"\) args\.push\("--dual-translate-first"\)/);
@@ -207,9 +207,9 @@ test("preferences provide a verified one-click runtime installer", async () => {
   );
   assert.match(pane, /codex-bilingual-install-runtime/);
   assert.match(pane, /一键安装\/修复 PDF 翻译环境/);
-  assert.match(pane, /macOS\/Linux 创建 Python 虚拟环境/);
-  assert.match(bridge, /installPreservedPdfRuntime\(\)/);
-  assert.match(main, /async function installPreservedPdfRuntime\(\)/);
+  assert.match(pane, /macOS\/Linux 的 Python 依赖/);
+  assert.match(bridge, /installPreservedPdfRuntime\(\(stage\)/);
+  assert.match(main, /async function installPreservedPdfRuntime\(onProgress\)/);
   assert.match(main, /content\/runtime\/\$\{name\}/);
   assert.match(main, /installPreservedPdfRuntime,/);
   assert.match(installer, /PDFMathTranslate-next\/PDFMathTranslate-next\/releases\/download\/v2\.9\.0/);
@@ -279,7 +279,7 @@ test("preserved PDF CLI writes resumable fragment checkpoints without polluting 
   assert.match(launcher, /CODEX_PDF_PROGRESS_FILE/);
   assert.match(launcher, /CODEX_PDF_FATAL_FILE/);
   assert.match(launcher, /await rm\(env\.CODEX_PDF_FATAL_FILE, \{ force: true \}\)/);
-  assert.match(launcher, /Codex CLI is unavailable; PDF translation stopped/);
+  assert.match(launcher, /翻译后端不可用，PDF 翻译已停止/);
   assert.match(translator, /def is_fatal/);
   assert.match(translator, /def request_broker/);
   assert.match(translator, /socket\.create_connection/);

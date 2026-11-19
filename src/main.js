@@ -18,6 +18,7 @@
     "prepare-pdf2zh-runtime.mjs",
     "codex-cli-translator.py",
     "codex-batch-broker.py",
+    "pdf_layout.py",
     "compact-dual-pdf.py",
     "export-bilingual-artifacts.mjs",
     "render-pages-to-docx.py",
@@ -33,6 +34,10 @@
   const queuedTaskIDs = new Set();
   const runningBatches = new Set();
   const pdfPreviewCache = new Map();
+  let managedScriptsReady;
+  let runtimeInstallation;
+  let installStage = "";
+  const installListeners = new Set();
 
   function notify(title, text) {
     const progress = new Zotero.ProgressWindow({ closeOnClick: true });
@@ -112,7 +117,8 @@
 
   function isBilingualPdf(item) {
     if (!item?.isAttachment?.() || item.attachmentContentType !== "application/pdf") return false;
-    const identity = `${item.getField?.("title") || ""} ${item.getFilePath?.() || ""}`;
+    const filename = item.attachmentFilename || String(item.getFilePath?.() || "").split(/[\\/]/).pop();
+    const identity = `${item.getField?.("title") || ""} ${filename}`;
     return /保真中英对照 PDF|中英对照|双语|bilingual|(?:^|[._ -])dual(?:[._ -]|$)|zh-CN\.dual/i.test(identity);
   }
 
@@ -239,11 +245,36 @@
   }
 
   function preservedPdfLauncherPath() {
-    return String(getPref("preservedPdfLauncherPath", "")).trim();
+    return String(getPref("preservedPdfLauncherPath", "")).trim() || managedLauncherPath();
   }
 
   function runtimeRootPath() {
     return PathUtils.join(PathUtils.profileDir || PathUtils.tempDir, RUNTIME_DIRECTORY);
+  }
+
+  function managedLauncherPath() {
+    return PathUtils.join(runtimeRootPath(), "scripts", "translate-preserved-pdf-cli.mjs");
+  }
+
+  function prepareManagedScripts() {
+    if (!managedScriptsReady) {
+      managedScriptsReady = (async () => {
+        const directory = PathUtils.parent(managedLauncherPath());
+        await IOUtils.makeDirectory(directory, { createAncestors: true });
+        for (const name of RUNTIME_FILES) {
+          const destination = PathUtils.join(directory, name);
+          const uri = `${global.rootURI}content/runtime/${name}`;
+          const script = Zotero.File.getResourceAsync
+            ? await Zotero.File.getResourceAsync(uri)
+            : Zotero.File.getContentsFromURL(uri);
+          await IOUtils.writeUTF8(destination, script, { tmpPath: destination + ".tmp" });
+        }
+      })().catch((error) => {
+        managedScriptsReady = null;
+        throw error;
+      });
+    }
+    return managedScriptsReady;
   }
 
   function dualInnerTrimPoints(value = getPref("dualInnerTrimPoints", 80)) {
@@ -278,22 +309,51 @@
     }
     if (!engine) missing.push(engineCandidates.map((candidate) => candidate.slice(root.length + 1)).join(" 或 "));
     if (missing.length) throw new Error(`所选目录不是已准备好的 Codex 双语 PDF 工作目录，缺少：${missing.join("；")}`);
-    setPref("preservedPdfLauncherPath", launcher);
-    setPref("preservedPdfEnginePath", engine);
-    await runPreservedPdfLauncher(["--check"], await preservedPdfEnvironment());
-    return { root, launcher, engine };
+    return verifyAndSaveRuntime({ root, launcher, engine });
   }
 
-  async function installPreservedPdfRuntime() {
+  async function verifyAndSaveRuntime(result) {
+    const node = result.node || await nodeExecutablePath();
+    const env = await preservedPdfEnvironment(result.engine);
+    const { stdout } = await runPreservedPdfLauncher(["--check"], env, null, { launcher: result.launcher, node });
+    const checked = await parseRunnerResult(stdout);
+    if (checked.status !== "ready" || !checked.engine) throw new Error("PDF 启动器未通过本地预检。");
+    setPref("preservedPdfLauncherPath", result.launcher);
+    setPref("preservedPdfEnginePath", checked.engine);
+    setPref("cliNodePath", node);
+    return { ...result, engine: checked.engine, node };
+  }
+
+  function reportInstallStage(message) {
+    installStage = message;
+    for (const listener of installListeners) {
+      try { listener(message); } catch (_error) { installListeners.delete(listener); }
+    }
+  }
+
+  async function installPreservedPdfRuntime(onProgress) {
+    if (onProgress) installListeners.add(onProgress);
+    try {
+      if (!runtimeInstallation) {
+        runtimeInstallation = setupManagedRuntime().finally(() => { runtimeInstallation = null; installStage = ""; });
+      } else if (onProgress) onProgress(installStage);
+      return await runtimeInstallation;
+    } finally {
+      installListeners.delete(onProgress);
+    }
+  }
+
+  async function setupManagedRuntime() {
     const windows = Services.appinfo.OS === "WINNT";
     const runtimeRoot = runtimeRootPath();
     const scriptsDirectory = PathUtils.join(runtimeRoot, "scripts");
-    await IOUtils.makeDirectory(scriptsDirectory, { createAncestors: true });
-    for (const name of RUNTIME_FILES) {
-      const response = await fetch(`${global.rootURI}content/runtime/${name}`);
-      if (!response.ok) throw new Error(`无法读取插件内置运行脚本 ${name}（HTTP ${response.status}）。`);
-      await IOUtils.write(PathUtils.join(scriptsDirectory, name), new Uint8Array(await response.arrayBuffer()));
+    reportInstallStage("正在准备插件自带的启动脚本…");
+    // An explicit repair also restores files removed after this pane was opened.
+    if (managedScriptsReady) {
+      await managedScriptsReady.catch(() => {});
+      managedScriptsReady = null;
     }
+    await prepareManagedScripts();
     let process;
     if (windows) {
       const systemRoot = Services.env.get("SystemRoot") || "C:\\Windows";
@@ -307,19 +367,30 @@
         stderr: "pipe",
       });
     } else {
-      // macOS/Linux: a bash installer builds a venv from pinned PyPI packages.
-      // It needs a compatible interpreter (3.10-3.13) or uv; the script reports
-      // a readable error when neither is available.
       const installer = PathUtils.join(scriptsDirectory, "install-preserved-pdf-runtime.sh");
       if (!(await IOUtils.exists("/bin/bash"))) throw new Error("未找到 /bin/bash，无法安装 PDF 翻译环境。");
       process = await Subprocess.call({
         command: "/bin/bash",
         arguments: [installer, "--runtime-root", runtimeRoot],
+        environment: { CBR_NODE: await nodeExecutablePath() },
+        environmentAppend: true,
         stdout: "pipe",
         stderr: "pipe",
       });
     }
-    const stdoutPromise = readSubprocessStream(process.stdout);
+    let partialLine = "";
+    const stageLabels = {
+      "download-engine": "正在下载并校验 Windows PDF 引擎…",
+      "unpack-engine": "正在解压 PDF 引擎…",
+      "prepare-node": "正在检查或安装 Node.js…",
+    };
+    const stdoutPromise = readSubprocessStream(process.stdout, (chunk) => {
+      const lines = (partialLine + chunk).split(/\r?\n/);
+      partialLine = lines.pop();
+      for (const line of lines) {
+        if (line.startsWith("STAGE=")) reportInstallStage(stageLabels[line.slice(6)] || line.slice(6));
+      }
+    });
     const stderrPromise = readSubprocessStream(process.stderr);
     const exitCode = subprocessExitCode(await process.wait());
     const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
@@ -330,11 +401,8 @@
     const match = String(stdout).match(/INSTALL_JSON=(\{[^\r\n]+\})/g);
     if (!match?.length) throw new Error("安装器未返回 INSTALL_JSON，请检查磁盘空间和网络连接。");
     const result = JSON.parse(match.at(-1).slice("INSTALL_JSON=".length));
-    setPref("preservedPdfLauncherPath", result.launcher);
-    setPref("preservedPdfEnginePath", result.engine);
-    if (result.node) setPref("cliNodePath", result.node);
-    await runPreservedPdfLauncher(["--check"], await preservedPdfEnvironment());
-    return result;
+    reportInstallStage("正在验证 Node、Python 和 PDF 引擎…");
+    return verifyAndSaveRuntime(result);
   }
 
   async function firstExistingPath(candidates) {
@@ -344,9 +412,9 @@
     return "";
   }
 
-  async function preservedPdfEnvironment() {
+  async function preservedPdfEnvironment(engineOverride) {
     const environment = {};
-    let engine = String(getPref("preservedPdfEnginePath", "")).trim();
+    let engine = engineOverride ?? String(getPref("preservedPdfEnginePath", "")).trim();
     // Migrate directories selected before the official portable 0.6.4 bundle.
     if (engine) {
       const legacySuffix = "\\.tools\\pdf2zh-next\\Scripts\\pdf2zh_next.exe";
@@ -357,15 +425,13 @@
         );
         if (await IOUtils.exists(portableEngine)) {
           engine = portableEngine;
-          setPref("preservedPdfEnginePath", engine);
+          if (engineOverride === undefined) setPref("preservedPdfEnginePath", engine);
         }
       }
     }
     const selectedBackend = String(getPref("backend", "cli"));
     const pdfBackend = selectedBackend === "api" ? "api" : "cli";
     environment.CODEX_PDF_BACKEND = pdfBackend;
-    const codexHome = codexHomePath();
-    const codexPath = codexScriptPath();
     const model = String(getPref("cliModel", "")).trim();
     const reasoning = String(getPref("preservedPdfReasoning", "low")).trim();
     const windows = Services.appinfo.OS === "WINNT";
@@ -392,6 +458,9 @@
       if (apiKey) environment.CODEX_PDF_API_KEY = apiKey;
       if (apiProvider) environment.CODEX_PDF_API_PROVIDER = apiProvider;
     } else {
+      const codexHome = codexHomePath();
+      if (!windows) environment.PATH = await cliSearchPath();
+      const codexPath = await codexScriptPath(environment.PATH);
       if (codexHome) environment.CODEX_PDF_CODEX_HOME = codexHome;
       if (codexPath) environment.CODEX_PDF_CODEX = codexPath;
       if (model) environment.CODEX_PDF_MODEL = model;
@@ -427,22 +496,23 @@
     throw new Error(`保真 PDF 启动器未返回 RESULT_JSON。${detail ? `原始错误：${detail}` : "请检查启动器 stderr。"}`);
   }
 
-  async function readSubprocessStream(stream) {
+  async function readSubprocessStream(stream, onChunk) {
     if (!stream) return "";
     let output = "";
     while (true) {
       const chunk = await stream.readString();
       if (!chunk) return output;
       output += chunk;
+      onChunk?.(chunk);
     }
   }
 
-  async function runPreservedPdfLauncher(arguments_, environment, onProcess) {
-    const launcher = preservedPdfLauncherPath();
-    if (!launcher) throw new Error("PDF 翻译环境尚未配置。请打开插件设置，点击“一键安装/修复 PDF 翻译环境”。");
+  async function runPreservedPdfLauncher(arguments_, environment, onProcess, candidate = {}) {
+    const launcher = candidate.launcher || preservedPdfLauncherPath();
+    if (launcher === managedLauncherPath()) await prepareManagedScripts();
     if (!(await IOUtils.exists(launcher))) throw new Error(`未找到保真 PDF 启动器：${launcher}`);
-    const node = await nodeExecutablePath();
-    if (!node) throw new Error("未找到 node.exe。请在插件设置中填写 Node 路径。");
+    const node = candidate.node || await nodeExecutablePath();
+    if (!node) throw new Error("未找到 Node.js。请点击“一键安装/修复 PDF 翻译环境”。");
     const process = await Subprocess.call({
       command: node,
       arguments: [launcher, ...arguments_],
@@ -463,6 +533,12 @@
     return { stdout, stderr };
   }
 
+  async function checkPreservedPdfRuntime() {
+    const environment = await preservedPdfEnvironment();
+    const { stdout } = await runPreservedPdfLauncher(["--check"], environment);
+    return parseRunnerResult(stdout);
+  }
+
   async function readPreservedProgress(progressPath, taskID) {
     if (!progressPath || !(await IOUtils.exists(progressPath))) return null;
     try {
@@ -476,8 +552,9 @@
       if (!entries.length && !events.length) return null;
       const latest = entries.at(-1) || {};
       const latestEvent = events.at(-1) || {};
-      const batchIDs = new Set(entries.map((entry) => entry.batchId).filter(Boolean));
-      const codexCalls = Math.max(batchIDs.size, ...entries.map((entry) => Number(entry.codexCallIndex) || 0), Number(latestEvent.codexCalls) || 0);
+      const batchIDs = new Set(entries.filter((entry) => !entry.cached).map((entry) => entry.batchId).filter(Boolean));
+      const codexCalls = records.reduce((count, entry) => Math.max(count,
+        Number(entry.codexCallIndex || entry.codexCalls || entry.callIndex) || 0), batchIDs.size);
       const batchStatus = latestEvent.stage === "batch_partial_fallback"
         ? `批次有 ${Number(latestEvent.missingFragments) || 0} 段缺失，正在只重试缺失段`
         : latestEvent.stage === "batch_started"
@@ -492,6 +569,7 @@
       } : {};
       return {
         completedSegments: entries.length,
+        resumedSegments: entries.filter((entry) => entry.cached).length,
         processedFragmentChars: entries.reduce((sum, entry) => sum + (Number(entry.inputChars) || 0), 0),
         currentFragmentChars: Number(latest.inputChars) || 0,
         currentFragmentElapsedMs: Number(latest.elapsedMs) || 0,
@@ -557,10 +635,20 @@
     }
   }
 
-  function codexScriptPath() {
+  async function cliSearchPath() {
+    const node = await nodeExecutablePath();
+    const home = Services.dirsvc.get("Home", Ci.nsIFile).path;
+    return [node && PathUtils.parent(node), Services.env.get("PATH"), PathUtils.join(home, ".local", "bin"),
+      "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].filter(Boolean).join(":");
+  }
+
+  async function codexScriptPath(searchPath) {
     const configured = String(getPref("cliPath", "")).trim();
     if (configured) return configured;
-    if (!Zotero.isWin) return "codex";
+    if (!Zotero.isWin) {
+      const entries = (searchPath || await cliSearchPath()).split(":").filter(Boolean);
+      return await firstExistingPath(entries.map((entry) => PathUtils.join(entry, "codex"))) || "codex";
+    }
     const appData = Services.env.get("APPDATA");
     return PathUtils.join(appData, "npm", "codex.cmd");
   }
@@ -568,7 +656,8 @@
   function codexHomePath() {
     const configured = String(getPref("cliHomePath", "")).trim();
     if (configured) return configured;
-    const userProfile = Services.env.get("USERPROFILE");
+    if (!Zotero.isWin && Services.env.get("CODEX_HOME")) return Services.env.get("CODEX_HOME");
+    const userProfile = Zotero.isWin ? Services.env.get("USERPROFILE") : Services.dirsvc.get("Home", Ci.nsIFile).path;
     return userProfile ? PathUtils.join(userProfile, ".codex") : "";
   }
 
@@ -578,6 +667,7 @@
     if (Services.appinfo.OS === "WINNT") {
       const pathEntries = String(Services.env.get("PATH") || "").split(";").filter(Boolean);
       candidates.push(
+        PathUtils.join(runtimeRootPath(), ".tools", "node", "node.exe"),
         ...pathEntries.map((entry) => PathUtils.join(entry, "node.exe")),
         "C:\\Program Files\\nodejs\\node.exe",
         "D:\\Software\\nodejs\\node.exe",
@@ -587,6 +677,7 @@
       // installs are invisible unless we probe their well-known locations.
       const pathEntries = String(Services.env.get("PATH") || "").split(":").filter(Boolean);
       candidates.push(
+        PathUtils.join(runtimeRootPath(), ".tools", "node", "bin", "node"),
         ...pathEntries.map((entry) => PathUtils.join(entry, "node")),
         "/opt/homebrew/bin/node",
         "/usr/local/bin/node",
@@ -656,7 +747,7 @@
   async function startAppServer() {
     if (appServer) return appServer;
     if (!Zotero.isWin) throw new Error("Codex App Server 当前仅实现 Windows 原生 Codex 运行时。");
-    const script = codexScriptPath();
+    const script = await codexScriptPath();
     const native = nativeCodexPaths(script);
     if (!(await IOUtils.exists(native.executable))) {
       throw new Error("未找到 Codex 原生运行时。请确认 @openai/codex 已通过 npm 全局安装。");
@@ -808,13 +899,13 @@
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: translationPrompt(source) }],
-        temperature: 0.2,
       }),
       headers: apiHeaders(),
       responseType: "json",
       successCodes: [200],
     });
-    const translation = response.response?.choices?.[0]?.message?.content?.trim();
+    const content = response.response?.choices?.[0]?.message?.content;
+    const translation = (Array.isArray(content) ? content.map((part) => part?.text || "").join("") : content || "").trim();
     if (!translation) throw new Error("API 返回中没有可用的译文。");
     return { text: translation, usage: response.response?.usage || null };
   }
@@ -864,7 +955,8 @@
   }
 
   async function translateWithCodex(source, tempDir) {
-    const script = codexScriptPath();
+    const script = await codexScriptPath();
+    if (!Zotero.isWin && !PathUtils.isAbsolute(script)) throw new Error("未找到 Codex CLI。请安装并登录 Codex，或在设置中选择 API。");
     if (Zotero.isWin && !(await IOUtils.exists(script))) {
       throw new Error("未找到 Codex CLI。请先安装并登录 Codex，或将 codex.cmd 放在 %APPDATA%\\npm 下。");
     }
@@ -876,7 +968,7 @@
     try {
       if (Zotero.isWin) {
         const model = String(getPref("cliModel", "")).trim();
-        const cliArguments = ["exec", "--ignore-user-config", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check"];
+        const cliArguments = ["exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check"];
         if (model) cliArguments.push("-m", model);
         cliArguments.push("--output-last-message", outputPath, "-");
         const entry = codexEntryPath(script);
@@ -886,7 +978,6 @@
         const process = await Subprocess.call(node ? {
           command: node,
           arguments: [entry, ...cliArguments],
-          stdin: prompt,
           stderr: "pipe",
           environment,
           environmentAppend: Boolean(environment),
@@ -897,27 +988,36 @@
           environment,
           environmentAppend: Boolean(environment),
         });
-        const stderrPromise = process.stderr?.readString() || Promise.resolve("");
+        const stdoutPromise = readSubprocessStream(process.stdout);
+        const stderrPromise = readSubprocessStream(process.stderr);
+        if (node) {
+          await process.stdin.write(prompt);
+          await process.stdin.close();
+        }
         const exitCode = subprocessExitCode(await process.wait());
-        const stderr = await stderrPromise;
+        const [, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
         if (exitCode !== 0) {
           const detail = stderr.trim().replace(/\s+/g, " ").slice(0, 240);
           throw new Error(`Codex CLI 执行失败（退出码 ${exitCode}）${detail ? `：${detail}` : "。请在终端运行 codex login status 检查登录状态。"}`);
         }
       } else {
         const model = String(getPref("cliModel", "")).trim();
-        const cliArguments = ["exec", "--ignore-user-config", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check"];
+        const cliArguments = ["exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check"];
         if (model) cliArguments.push("-m", model);
         cliArguments.push("--output-last-message", outputPath, "-");
         const process = await Subprocess.call({
           command: script,
           arguments: cliArguments,
-          stdin: prompt,
           stderr: "pipe",
+          environment: { CODEX_HOME: codexHomePath(), PATH: await cliSearchPath() },
+          environmentAppend: true,
         });
-        const stderrPromise = process.stderr?.readString() || Promise.resolve("");
+        const stdoutPromise = readSubprocessStream(process.stdout);
+        const stderrPromise = readSubprocessStream(process.stderr);
+        await process.stdin.write(prompt);
+        await process.stdin.close();
         const exitCode = subprocessExitCode(await process.wait());
-        const stderr = await stderrPromise;
+        const [, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
         if (exitCode !== 0) {
           const detail = stderr.trim().replace(/\s+/g, " ").slice(0, 240);
           throw new Error(`Codex CLI 执行失败（退出码 ${exitCode}）${detail ? `：${detail}` : "。"}`);
@@ -1061,12 +1161,13 @@
     if (!engineDualPdf || !(await IOUtils.exists(engineDualPdf))) throw new Error("原始宽版双语 PDF 已不存在，无法重新调整。");
 
     const launcher = preservedPdfLauncherPath();
-    const workspace = launcher ? PathUtils.parent(PathUtils.parent(launcher)) : "";
-    const portableRoot = workspace
-      ? PathUtils.join(workspace, ".tools", "pdf2zh-next-staging-2.9.0-babeldoc-0.6.4", "pdf2zh")
-      : "";
-    const python = portableRoot ? PathUtils.join(portableRoot, "runtime", "pythonw.exe") : "";
-    const script = workspace ? PathUtils.join(workspace, "scripts", "compact-dual-pdf.py") : "";
+    const runtime = await checkPreservedPdfRuntime();
+    const engineDirectory = PathUtils.parent(runtime.engine);
+    // Older external launchers report the engine but omit the interpreter.
+    const python = runtime.python || await firstExistingPath(Zotero.isWin
+      ? [PathUtils.join(engineDirectory, "runtime", "pythonw.exe"), PathUtils.join(engineDirectory, "python.exe")]
+      : [PathUtils.join(engineDirectory, "python3")]);
+    const script = PathUtils.join(PathUtils.parent(launcher), "compact-dual-pdf.py");
     if (!python || !(await IOUtils.exists(python)) || !script || !(await IOUtils.exists(script))) {
       throw new Error("页面宽度处理器未配置；请先在插件设置中选择 PDF 工作目录。");
     }
@@ -1211,21 +1312,24 @@
     const progress = null;
     const line = silentProgressLine();
     let progressPath = "";
-    let refreshInFlight = false;
-    const refreshProgress = async () => {
-      if (refreshInFlight) return;
-      refreshInFlight = true;
-      try {
-        const checkpoint = await readPreservedProgress(progressPath, task.id);
-        if (checkpoint && checkpoint.completedSegments !== task.completedSegments) {
-          task = CodexTaskMetrics.updateTask(task, checkpoint);
-          await persistTask(task);
+    let refreshInFlight;
+    let lastProgressSize = 0;
+    const refreshProgress = () => {
+      if (refreshInFlight) return refreshInFlight;
+      refreshInFlight = (async () => {
+        if (!progressPath) return;
+        const info = await IOUtils.stat(progressPath).catch(() => null);
+        if (info?.size && info.size !== lastProgressSize) {
+          const checkpoint = await readPreservedProgress(progressPath, task.id);
+          if (checkpoint) {
+            task = CodexTaskMetrics.updateTask(task, checkpoint);
+            await persistTask(task);
+            lastProgressSize = info.size;
+          }
         }
-      } finally {
-        refreshInFlight = false;
-      }
-      if (!task.startedAt) return;
-      line.setText(`${liveTaskText(task)} 可在“工具 → Codex 翻译任务…”查看详情。`);
+        line.setText(`${liveTaskText(task)} 可在“工具 → Codex 翻译任务…”查看详情。`);
+      })().catch((error) => Zotero.logError(error)).finally(() => { refreshInFlight = null; });
+      return refreshInFlight;
     };
     void refreshProgress();
     const timer = setInterval(() => void refreshProgress(), 1000);
@@ -1251,6 +1355,8 @@
         environment,
         (process) => { const running = runningTasks.get(task.id); if (running) running.process = process; },
       );
+      clearInterval(timer);
+      await refreshInFlight;
       await refreshProgress();
       if (runningTasks.get(task.id)?.cancelled) throw new Error("任务已取消");
       const payload = await parseRunnerResult(
@@ -1270,6 +1376,8 @@
       finishProgressWindow(progress, line, "保真中英对照 PDF 已生成（100%）");
       return pdfAttachment;
     } catch (error) {
+      clearInterval(timer);
+      await refreshInFlight;
       const cancelled = runningTasks.get(task.id)?.cancelled || error.message === "任务已取消";
       task = CodexTaskMetrics.finishTask(task, {
         status: cancelled ? "cancelled" : "failed",
@@ -2032,6 +2140,7 @@
     fetchOfficialPrice,
     fetchAppServerModels,
     preservedPdfModelSource,
+    checkPreservedPdfRuntime,
     installPreservedPdfRuntime,
     selectPreservedPdfWorkspace,
     adjustBilingualPdfWidth,

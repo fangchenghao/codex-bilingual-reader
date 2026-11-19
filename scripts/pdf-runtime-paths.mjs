@@ -19,9 +19,9 @@
  */
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
-export const PORTABLE_ROOT = resolve(
+export const PORTABLE_ROOT = join(
   ".tools",
   "pdf2zh-next-staging-2.9.0-babeldoc-0.6.4",
   "pdf2zh",
@@ -56,10 +56,12 @@ export async function pathExists(candidate) {
  */
 export async function resolvePdfRuntime({ root, platform = process.platform, env = process.env }) {
   const windows = isWindows(platform);
-  const portableRoot = resolve(root, PORTABLE_ROOT);
+  const defaultPortableRoot = resolve(root, PORTABLE_ROOT);
   const venvRoot = resolve(root, VENV_ROOT);
   const engineOverride = String(env.CODEX_PDF_ENGINE || "").trim();
   const pythonOverride = String(env.CODEX_PDF_PYTHON || "").trim();
+  const portableOverride = windows && /[\\/]pdf2zh[\\/]pdf2zh\.exe$/i.test(engineOverride);
+  const portableRoot = portableOverride ? dirname(engineOverride) : defaultPortableRoot;
 
   const bundledEngine = windows
     ? resolve(portableRoot, "pdf2zh.exe")
@@ -73,12 +75,13 @@ export async function resolvePdfRuntime({ root, platform = process.platform, env
 
   // A custom engine that ships its own interpreter can also be used by naming
   // the venv/bin directory next to it; otherwise fall back to the bundled one.
-  if (!pythonOverride && engineOverride && !(await pathExists(python))) {
+  if (!pythonOverride && engineOverride && !portableOverride) {
     const sibling = resolve(engineOverride, "..", windows ? "python.exe" : "python3");
     if (await pathExists(sibling)) python = sibling;
   }
 
-  const mode = engineOverride ? "custom" : windows ? "portable" : "venv";
+  const portable = portableOverride || (windows && !engineOverride);
+  const mode = portable ? "portable" : engineOverride ? "custom" : "venv";
   return {
     platform,
     mode,
@@ -99,29 +102,20 @@ export async function resolvePdfRuntime({ root, platform = process.platform, env
 }
 
 /**
- * Proxy defaults differ per platform:
- *  - Windows assumes a local Clash instance on 7897, as the original add-on did.
- *  - macOS/Linux usually have no explicit proxy env, but the *system* proxy can
- *    still be inherited by Python's HTTP stack. When no proxy env var is set we
- *    force NO_PROXY=*, because a system proxy pointing at a stopped client
- *    turns every request into a ConnectTimeout. Users who really need a proxy
- *    can export HTTP(S)_PROXY and it is preserved untouched.
+ * Keep local layout traffic off the proxy, including when Zotero inherited a
+ * user-supplied no_proxy list. Keep the direct default for unconfigured hosts.
  */
-export function applyProxyDefaults(env, platform = process.platform) {
+export function applyProxyDefaults(env) {
   const proxyKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"];
   const hasExplicitProxy = proxyKeys.some((key) => String(env[key] || "").trim());
   const next = { ...env };
-  if (platform === "win32") {
-    const defaults = { HTTP_PROXY: "http://127.0.0.1:7897", HTTPS_PROXY: "http://127.0.0.1:7897", ALL_PROXY: "http://127.0.0.1:7897" };
-    for (const [key, value] of Object.entries(defaults)) {
-      if (!next[key]) next[key] = value;
-    }
-  }
   for (const key of proxyKeys) {
     if (key in next && !String(next[key] || "").trim()) delete next[key];
   }
-  if (!String(next.NO_PROXY || "").trim()) {
-    next.NO_PROXY = hasExplicitProxy ? "127.0.0.1,localhost" : "*";
-  }
+  const exclusions = new Set([next.NO_PROXY, next.no_proxy].filter(Boolean).join(",").split(",").map((entry) => entry.trim()).filter(Boolean));
+  if (!exclusions.size && !hasExplicitProxy) exclusions.add("*");
+  exclusions.add("127.0.0.1");
+  exclusions.add("localhost");
+  next.NO_PROXY = next.no_proxy = exclusions.has("*") ? "*" : [...exclusions].join(",");
   return next;
 }

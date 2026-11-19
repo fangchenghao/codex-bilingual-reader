@@ -1,23 +1,112 @@
 import asyncio
+import hashlib
 import importlib.util
 import json
 import os
 import re
+import sys
 import tempfile
 import threading
 import time
 import unittest
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "codex-batch-broker.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("codex_batch_broker", SCRIPT)
 broker_module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(broker_module)
 
 
 class BatchBrokerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_layout_bridge_preserves_cross_page_context_across_batches_and_resume(self):
+        from pdf_layout import start_layout_server
+
+        prompts = []
+        first = "The decrease in {v1} is consistent with"
+        second = "thermal expansion of the sample [7]."
+
+        def provider(prompt):
+            prompts.append(prompt)
+            target = json.loads(prompt.split("Input follows:\n\n")[1])["target"]
+            return ("{v1} 的下降与" if target == first else "样品的热膨胀相符 [7]。"), None
+
+        def request(port, rows):
+            prompt = "## Contextual Hints for Better Translation\n1. Sample drift\n\n## Here is the input:\n\n" + json.dumps(rows)
+            body = json.dumps({"messages": [{"role": "user", "content": prompt}]}).encode()
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", data=body, headers={"Authorization": "Bearer local-test"})
+            with urllib.request.urlopen(req, timeout=4) as response:
+                return json.loads(json.load(response)["choices"][0]["message"]["content"])
+
+        rows = [{"id": 8, "input": first}, {"id": 3, "input": second}]
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+            "CODEX_PDF_BATCH_MAX_FRAGMENTS": "1", "CODEX_PDF_BATCH_CONCURRENCY": "1",
+            "CODEX_PDF_CHECKPOINT_FILE": str(Path(temp) / "checkpoint.jsonl"),
+            "CODEX_PDF_BACKEND": "api", "CODEX_PDF_API_MODEL": "fixture",
+        }), patch.object(broker_module, "run_translation_result", provider):
+            # Seed a plain-text checkpoint from the old launcher.
+            broker_module.append_jsonl(os.environ["CODEX_PDF_CHECKPOINT_FILE"], {
+                "sourceHash": hashlib.sha256(first.encode()).hexdigest(), "translation": "过期译文",
+            })
+            for run in range(2):
+                broker = broker_module.Broker()
+                worker = asyncio.create_task(broker.dispatcher())
+                server = start_layout_server("local-test", broker.layout_completion)
+                try:
+                    answers = await asyncio.to_thread(request, server.server_port, rows)
+                    self.assertEqual(answers, [{"id": 8, "output": "{v1} 的下降与"}, {"id": 3, "output": "样品的热膨胀相符 [7]。"}])
+                    self.assertEqual(len(prompts), 2)
+                    if run == 1:
+                        await asyncio.to_thread(request, server.server_port, [rows[0], {"id": 4, "input": "electrical drift."}])
+                        self.assertEqual(len(prompts), 4, "a changed neighbor must also invalidate the first half")
+                finally:
+                    await asyncio.to_thread(server.shutdown)
+                    server.server_close()
+                    worker.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await worker
+            inputs = [json.loads(prompt.split("Input follows:\n\n")[1]) for prompt in prompts[:2]]
+            self.assertEqual(inputs[0]["read_only_context"]["next"], second)
+            self.assertEqual(inputs[1]["read_only_context"]["previous"], first)
+
+    async def test_layout_retry_preserves_markers_and_neighbors_with_one_provider_slot(self):
+        rows = [{"id": 0, "input": "The value {v1} depends on"}, {"id": 1, "input": "the choice of basis."}]
+        layout_prompt = "## Here is the input:\n" + json.dumps(rows)
+        calls = []
+        events = []
+
+        def provider(prompt):
+            calls.append(prompt)
+            markers = re.findall(r"CBR_BEGIN_([a-f0-9]+)", prompt)
+            if markers:
+                return "\n".join(f"[[[CBR_RESULT_{m}]]]基的选择。[[[CBR_END_{m}]]]" for m in markers), None
+            return "{v1} 的值取决于", None
+
+        with (
+            patch.dict(os.environ, {"CODEX_PDF_BATCH_WAIT_MS": "5", "CODEX_PDF_BATCH_CONCURRENCY": "1"}),
+            patch.object(broker_module, "run_translation_result", provider),
+            patch.object(broker_module, "append_jsonl", side_effect=lambda _, row: events.append(row)),
+        ):
+            broker = broker_module.Broker()
+            worker = asyncio.create_task(broker.dispatcher())
+            try:
+                answers = json.loads(await asyncio.wait_for(broker.layout_completion(layout_prompt), 3))
+                self.assertEqual([row["output"] for row in answers], ["{v1} 的值取决于", "基的选择。"])
+                self.assertEqual(len(calls), 2)
+                self.assertIn('"next": "the choice of basis."', calls[1])
+                await asyncio.wait_for(broker.layout_completion("Now translate the following text:\n\n" + rows[0]["input"]), 3)
+                self.assertIn('"next": "the choice of basis."', calls[2])
+                self.assertEqual(sum(row.get("kind") == "fragment" for row in events), 2)
+                self.assertTrue(any(row.get("stage") == "layout_retry" for row in events))
+            finally:
+                worker.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await worker
+
     def test_openai_and_deepseek_compatible_api_requests(self):
         requests = []
 

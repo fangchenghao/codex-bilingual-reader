@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.0 - 2026-11-19
+
+- Translate with neighboring text from BabelDOC across page and column breaks. Batch requests retain paragraph IDs and checkpoints account for context and backend settings.
+- Discover, provision and verify the managed runtime from Zotero settings. Show installation stages, keep paths under advanced settings, and refresh launcher scripts when the XPI changes.
+- Resolve the Windows portable engine relative to its workspace and use the detected interpreter for PDF margin adjustments on macOS and Linux. An original attachment in a directory named “bilingual” can now be translated.
+
 ## 1.5.0 - 2026-10-21
 
 - Add macOS/Linux support for the preserved-layout PDF workflow. One-click setup now runs `scripts/install-preserved-pdf-runtime.sh`, which provisions a Python 3.10-3.13 virtualenv (via `uv` when available) and installs the pinned `pdf2zh_next` 2.9.0 / `BabelDOC` 0.6.2 engine stack.

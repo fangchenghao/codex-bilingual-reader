@@ -1,5 +1,8 @@
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { constants } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, parse, resolve } from "node:path";
 import { preparePdf2zhRuntime } from "./prepare-pdf2zh-runtime.mjs";
@@ -19,20 +22,13 @@ const runtime = await resolvePdfRuntime({ root, env: process.env });
 const home = runtime.home;
 const portableRoot = runtime.portableRoot;
 const engine = runtime.engine;
-// CLITranslator parses its command with POSIX shlex even on Windows. Forward
-// slashes plus explicit quotes keep this absolute path intact across that hop.
-// On Windows use the bundled pythonw.exe so the bridge never opens a console
-// window; on macOS/Linux the venv interpreter is already windowless.
-const bridgePython = runtime.python.replace(/\\\\/g, "/");
-const wrapper = resolve(root, "scripts", "codex-cli-translator.py").replace(/\\\\/g, "/");
-const broker = resolve(root, "scripts", "codex-batch-broker.py").replace(/\\\\/g, "/");
+const bridgePython = runtime.python;
+const broker = resolve(root, "scripts", "codex-batch-broker.py");
 const compactDualPdfScript = resolve(root, "scripts", "compact-dual-pdf.py");
 const exporter = resolve(root, "scripts", "export-bilingual-artifacts.mjs");
 const docxBuilder = resolve(root, "scripts", "render-pages-to-docx.py");
 const requestedCliTimeout = Number(process.env.CODEX_PDF_CLI_TIMEOUT_SECONDS || "300");
-// PDFMathTranslate validates this CLI option before doing any work and its
-// current schema caps it at 300 seconds.
-const cliTimeout = String(Math.min(300, Math.max(1, Number.isFinite(requestedCliTimeout) ? requestedCliTimeout : 300)));
+const backendTimeout = Math.max(1, Number.isFinite(requestedCliTimeout) ? requestedCliTimeout : 300);
 // These workers only feed the local broker. The broker limits actual Codex
 // concurrency independently while enough layout fragments gather per batch.
 // Apple Silicon saturates earlier than a desktop x86 machine, so default lower.
@@ -53,6 +49,8 @@ const env = applyProxyDefaults({
   CODEX_HOME: codexHome,
   CODEX_PDF_CODEX_HOME: codexHome,
   CODEX_PDF_CODEX: process.env.CODEX_PDF_CODEX || "codex",
+  CODEX_PDF_CLI_TIMEOUT_SECONDS: String(Math.floor(backendTimeout)),
+  CODEX_PDF_BATCH_WAIT_MS: process.env.CODEX_PDF_BATCH_WAIT_MS || "200",
   PYTHONIOENCODING: "utf-8",
   PYTHONUTF8: "1",
   NO_COLOR: "1",
@@ -70,15 +68,18 @@ const env = applyProxyDefaults({
 });
 if (checking) {
   await mkdir(home, { recursive: true });
-  await access(engine);
+  await access(engine, constants.X_OK);
   await access(resolve(root, "scripts", "prepare-pdf2zh-runtime.mjs"));
-  await access(bridgePython);
-  await access(wrapper);
+  await access(bridgePython, constants.X_OK);
+  await access(resolve(root, "scripts", "pdf_layout.py"));
   await access(broker);
   await access(compactDualPdfScript);
   await access(exporter);
   await access(docxBuilder);
-  console.log(`RESULT_JSON=${JSON.stringify({ status: "ready", engine, wrapper })}`);
+  const imports = "import sys; sys.path.extend(sys.argv[1:]); import pymupdf, babeldoc, pdf2zh_next";
+  const packagePaths = runtime.mode === "portable" ? [resolve(portableRoot, "site-packages")] : [];
+  await promisify(execFile)(bridgePython, ["-c", imports, ...packagePaths], { env, windowsHide: true, timeout: 30000 });
+  console.log(`RESULT_JSON=${JSON.stringify({ status: "ready", engine, python: bridgePython })}`);
   process.exit(0);
 }
 await mkdir(output, { recursive: true });
@@ -94,10 +95,18 @@ env.CODEX_PDF_FATAL_FILE = resolve(output, "codex-fatal-error.json");
 await rm(env.CODEX_PDF_FATAL_FILE, { force: true });
 const brokerReadyPath = resolve(output, "codex-batch-broker-ready.json");
 await rm(brokerReadyPath, { force: true });
-const brokerChild = spawn(bridgePython, [broker, "--ready-file", brokerReadyPath], { cwd: root, env, windowsHide: true, stdio: "ignore" });
+const layoutToken = randomBytes(32).toString("hex");
+const brokerChild = spawn(bridgePython, [broker, "--layout", "--ready-file", brokerReadyPath], {
+  cwd: root, env: { ...env, CODEX_PDF_LAYOUT_TOKEN: layoutToken }, windowsHide: true, stdio: ["pipe", "ignore", "pipe"],
+});
+let brokerError = "";
+let brokerSpawnFailed = false;
+brokerChild.stderr.setEncoding("utf8");
+brokerChild.stderr.on("data", (chunk) => { brokerError = (brokerError + chunk).slice(-1200); });
+brokerChild.on("error", (error) => { brokerSpawnFailed = true; brokerError = error.message; });
 let brokerReady = null;
 const brokerStartedAt = Date.now();
-while (!brokerReady && Date.now() - brokerStartedAt < 10000) {
+while (!brokerReady && brokerChild.exitCode === null && !brokerSpawnFailed && Date.now() - brokerStartedAt < 10000) {
   try {
     brokerReady = JSON.parse(await readFile(brokerReadyPath, "utf8"));
   } catch (error) {
@@ -107,14 +116,13 @@ while (!brokerReady && Date.now() - brokerStartedAt < 10000) {
 }
 if (!Number(brokerReady?.port)) {
   brokerChild.kill();
-  throw new Error("Codex batch broker did not start within 10 seconds");
+  throw new Error(`PDF 翻译服务启动失败：${brokerError || "未收到就绪信号，请修复 PDF 环境。"}`);
 }
-env.CODEX_PDF_BROKER_PORT = String(brokerReady.port);
 const stopBroker = () => { if (!brokerChild.killed) brokerChild.kill(); };
 const sourceStem = parse(basename(source)).name;
 const translationSide = process.env.CODEX_PDF_TRANSLATION_SIDE === "left" ? "left" : "right";
 async function latestEngineDualPdf() {
-  const candidates = (await readdir(output)).filter((name) => name.startsWith(sourceStem) && /dual.*\.pdf$/i.test(name));
+  const candidates = (await readdir(output)).filter((name) => name.startsWith(sourceStem) && /dual.*\.pdf$/i.test(name) && !/\.compact\.pdf$/i.test(name));
   if (!candidates.length) return "";
   const paths = await Promise.all(candidates.map(async (name) => {
     const filePath = resolve(output, name);
@@ -124,8 +132,11 @@ async function latestEngineDualPdf() {
 }
 const args = [
   source, "--output", output, "--lang-in", "en", "--lang-out", "zh-CN",
-  "--clitranslator", "--clitranslator-command", `\"${bridgePython}\" \"${wrapper}\" --utf8-v2`,
-  "--clitranslator-timeout", cliTimeout,
+  // Native LLM requests carry ordered cross-page and cross-column groups.
+  // The broker reuses its own context-aware checkpoints for these requests.
+  "--openaicompatible", "--openai-compatible-base-url", `http://127.0.0.1:${brokerReady.port}/v1`,
+  "--openai-compatible-api-key", layoutToken, "--openai-compatible-model", "bilingual-reader",
+  "--openai-compatible-timeout", String(backendTimeout * 2 + 60), "--ignore-cache",
   "--qps", qps, "--pool-max-workers", workers, "--no-auto-extract-glossary",
   // Use BabelDOC's native dual-page compositor. It preserves the CJK font
   // resources Zotero can render. Do not pass --skip-clean: BabelDOC performs
@@ -140,6 +151,9 @@ if (String(env.CODEX_PDF_TRANSLATE_TABLE_TEXT || "true") !== "false") args.push(
 if (String(env.CODEX_PDF_PAGES || "").trim()) args.push("--pages", String(env.CODEX_PDF_PAGES).trim());
 if (translationSide === "left") args.push("--dual-translate-first");
 const child = spawn(engine, args, { cwd: root, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+const cancelChildren = () => { stopBroker(); child.kill(); };
+process.once("SIGTERM", cancelChildren);
+process.once("SIGINT", cancelChildren);
 child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
 let lastEngineActivityAt = Date.now();
 child.stdout.on("data", (chunk) => { lastEngineActivityAt = Date.now(); process.stdout.write(chunk); });
@@ -190,12 +204,14 @@ let exitCode;
 try {
   exitCode = await new Promise((resolvePromise, reject) => { child.on("error", reject); child.on("exit", (code) => resolvePromise(code)); });
 } finally {
+  process.off("SIGTERM", cancelChildren);
+  process.off("SIGINT", cancelChildren);
   clearInterval(fatalMonitor);
   clearInterval(recoveryMonitor);
   stopBroker();
 }
 fatalError ||= await readFatalError();
-if (fatalError) throw new Error(`Codex CLI is unavailable; PDF translation stopped: ${fatalError.message}`);
+if (fatalError) throw new Error(`翻译后端不可用，PDF 翻译已停止：${fatalError.message}`);
 if (exitCode !== 0 && !recoveredEngineDualPdf) throw new Error(`PDF engine failed (${exitCode})`);
 const engineDualPdf = recoveredEngineDualPdf || await latestEngineDualPdf();
 if (!engineDualPdf) throw new Error("PDF engine completed but no bilingual PDF artifact was found");

@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "Codex Bilingual Reader",
-  "version": "1.5.0",
-  "description": "Create an English-Chinese parallel reading view from Zotero full text using the local Codex CLI.",
+  "version": "1.6.0",
+  "description": "Translate papers into preserved-layout English-Chinese PDFs using Codex CLI or an OpenAI-compatible API.",
   "author": "Codex Bilingual Reader contributors",
   "homepage_url": "https://github.com/fangchenghao/codex-bilingual-reader",
   "icons": {

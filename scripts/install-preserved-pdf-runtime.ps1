@@ -37,7 +37,11 @@ function Download-Verified([string]$Url, [string]$Destination, [string]$Expected
   if (Test-Hash $Destination $Expected) { return }
   $curl = [IO.Path]::Combine($env:SystemRoot, "System32", "curl.exe")
   if (-not (Test-Path -LiteralPath $curl -PathType Leaf)) { throw "Windows curl.exe was not found." }
-  & $curl --fail --location --retry 3 --continue-at - --output $Destination $Url
+  if (Test-Path -LiteralPath $Destination) {
+    & $curl --fail --location --retry 3 --continue-at - --output $Destination $Url
+    if (($LASTEXITCODE -eq 0) -and (Test-Hash $Destination $Expected)) { return }
+  }
+  & $curl --fail --location --retry 3 --output $Destination $Url
   if ($LASTEXITCODE -ne 0) { throw "Download failed with curl exit code ${LASTEXITCODE}: $Url" }
   if (-not (Test-Hash $Destination $Expected)) {
     throw "SHA-256 verification failed for $Destination"
@@ -48,7 +52,9 @@ New-Item -ItemType Directory -Force -Path $runtime, $downloads, $tools | Out-Nul
 Assert-ChildPath $engineParent
 Assert-ChildPath $staging
 
-if (-not (Test-Path -LiteralPath $engineExe -PathType Leaf)) {
+$pythonExe = [IO.Path]::Combine($engineRoot, "runtime", "pythonw.exe")
+if (-not ((Test-Path -LiteralPath $engineExe -PathType Leaf) -and (Test-Path -LiteralPath $pythonExe -PathType Leaf))) {
+  Write-Output "STAGE=download-engine"
   $archive = if ($EngineArchivePath) {
     [IO.Path]::GetFullPath($EngineArchivePath)
   } else {
@@ -56,12 +62,13 @@ if (-not (Test-Path -LiteralPath $engineExe -PathType Leaf)) {
   }
   if (-not $EngineArchivePath) {
     Download-Verified $engineUrl $archive $engineSha256
-  } elseif (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
-    throw "The supplied engine archive does not exist: $archive"
+  } elseif (-not (Test-Hash $archive $engineSha256)) {
+    throw "The supplied engine archive is missing or failed SHA-256 verification: $archive"
   }
 
   if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
   New-Item -ItemType Directory -Force -Path $staging | Out-Null
+  Write-Output "STAGE=unpack-engine"
   $tar = [IO.Path]::Combine($env:SystemRoot, "System32", "tar.exe")
   if (-not (Test-Path -LiteralPath $tar -PathType Leaf)) { throw "Windows tar.exe was not found." }
   & $tar -xf $archive -C $staging
@@ -76,7 +83,12 @@ if (-not (Test-Path -LiteralPath $engineExe -PathType Leaf)) {
   Remove-Item -LiteralPath $staging -Recurse -Force
 }
 
+Write-Output "STAGE=prepare-node"
 $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($nodeCommand) {
+  & $nodeCommand.Source -e "process.exit(Number(process.versions.node.split('.')[0]) >= 20 ? 0 : 1)"
+  if ($LASTEXITCODE -ne 0) { $nodeCommand = $null }
+}
 if ($nodeCommand) {
   $nodeExe = $nodeCommand.Source
 } else {

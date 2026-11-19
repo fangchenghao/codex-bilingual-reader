@@ -1,4 +1,5 @@
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -31,6 +32,7 @@ const runtimeFiles = [
   "prepare-pdf2zh-runtime.mjs",
   "codex-cli-translator.py",
   "codex-batch-broker.py",
+  "pdf_layout.py",
   "compact-dual-pdf.py",
   "export-bilingual-artifacts.mjs",
   "render-pages-to-docx.py",
@@ -49,5 +51,15 @@ if (result.status !== 0) process.exit(result.status ?? 1);
 const runtimeZip = resolve(build, "codex-bilingual-runtime.zip");
 const runtimeResult = spawnSync(python, [resolve(root, "scripts", "create-runtime-bundle.py"), root, runtimeZip, ...runtimeFiles], { stdio: "inherit" });
 if (runtimeResult.status !== 0) process.exit(runtimeResult.status ?? 1);
+const manifest = JSON.parse(await readFile(resolve(staging, "manifest.json"), "utf8"));
+const { id, strict_min_version, strict_max_version } = manifest.applications.zotero;
+const update = {
+  version: manifest.version,
+  update_link: `${manifest.homepage_url}/releases/download/v${manifest.version}/codex-bilingual-reader.xpi`,
+  update_hash: `sha256:${createHash("sha256").update(await readFile(xpi)).digest("hex").toUpperCase()}`,
+  applications: { zotero: { strict_min_version, strict_max_version } },
+};
+const updateManifest = { addons: { [id]: { updates: [update] } } };
+await writeFile(resolve(build, "update.json"), JSON.stringify(updateManifest, null, 2) + "\n");
 console.log(`Built ${xpi}`);
 console.log(`Built ${runtimeZip}`);

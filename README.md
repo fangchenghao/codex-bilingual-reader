@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="addon/content/icons/icon.svg" width="112" alt="Codex Bilingual Reader logo">
+  <img src="https://raw.githubusercontent.com/fangchenghao/codex-bilingual-reader/main/addon/content/icons/icon.svg" width="112" alt="Codex Bilingual Reader logo">
 </p>
 
 <h1 align="center">Codex Bilingual Reader for Zotero</h1>
@@ -9,12 +9,12 @@
 <p align="center">
   <a href="https://github.com/fangchenghao/codex-bilingual-reader/releases/latest"><img src="https://img.shields.io/github/v/release/fangchenghao/codex-bilingual-reader" alt="Latest release"></a>
   <a href="https://github.com/fangchenghao/codex-bilingual-reader/actions/workflows/ci.yml"><img src="https://github.com/fangchenghao/codex-bilingual-reader/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/fangchenghao/codex-bilingual-reader" alt="MIT license"></a>
+  <a href="https://github.com/fangchenghao/codex-bilingual-reader/blob/main/LICENSE"><img src="https://img.shields.io/github/license/fangchenghao/codex-bilingual-reader" alt="MIT license"></a>
 </p>
 
 <p align="center"><a href="#中文">简体中文</a> · <a href="#english">English</a></p>
 
-![Codex Bilingual Reader GitHub preview](docs/assets/github-social-preview.png)
+![Codex Bilingual Reader GitHub preview](https://raw.githubusercontent.com/fangchenghao/codex-bilingual-reader/main/docs/assets/github-social-preview.png)
 
 ## 中文
 
@@ -33,7 +33,7 @@ Codex Bilingual Reader 是一个适用于 Zotero 8/9/10 的 MIT 开源插件。�
 
 ### 效果展示
 
-![ActPlan-1K 保排版中英对照 PDF](docs/assets/actplan-bilingual-preview.png)
+![ActPlan-1K 保排版中英对照 PDF](https://raw.githubusercontent.com/fangchenghao/codex-bilingual-reader/main/docs/assets/actplan-bilingual-preview.png)
 
 上图中英文位于左侧，可选择的中文译文位于右侧；图片、公式、表格和页面结构均得到保留。
 
@@ -44,16 +44,18 @@ Codex Bilingual Reader 是一个适用于 Zotero 8/9/10 的 MIT 开源插件。�
 3. 打开**工具 → Codex 中英对照设置…**，点击**一键安装/修复 PDF 翻译环境**。Windows 会下载并解压约 600 MB 的官方便携引擎；macOS/Linux 会在插件运行目录中创建 Python 虚拟环境并安装 `pdf2zh_next` / `BabelDOC`（约 900 MB）。两种方式通常都需要几分钟。
 4. 选择本地 Codex CLI 或 OpenAI 兼容 API，配置模型和凭据，并在翻译前点击**测试连接**。
 
+也可以用 `npm pack codex-bilingual-reader-for-zotero` 下载发布包。解压生成的 `.tgz`，在第 2 步选择其中的 `package/build/codex-bilingual-reader.xpi`。
+
 ### 保排版 PDF 配置
 
-一键安装完成后，插件会自动填写启动器、PDFMathTranslate 和 Node 路径并执行本地预检；普通用户无需克隆本仓库。已有开发环境或自定义安装位置的用户仍可使用**高级：选择已有工作目录…**或手动填写路径。
+打开设置后可以看到 PDF 环境是否就绪。点击安装按钮会显示下载、安装和校验阶段。预检成功后插件才保存路径。已有环境可以展开**高级设置 · 查看或更改路径**，选择工作目录或手动填写。升级插件后，托管目录中的启动脚本会自动更新，已有引擎可以继续使用。
 
 平台支持：
 
 - **Windows**：一键安装下载官方便携包并执行 SHA-256 校验；若系统没有 Node.js，会一并安装官方便携版本。
-- **macOS / Linux**：一键安装在 `codex-bilingual-runtime/.venv` 中创建虚拟环境，需要 Python 3.10–3.13 或 [uv](https://docs.astral.sh/uv/)（有 `uv` 时会自动用它安装 Python 3.12）。首次运行 BabelDOC 还会从镜像下载约 340 MB 的版面模型与字体到 `~/.cache/babeldoc`。
+- **macOS / Linux**：一键安装在 `codex-bilingual-runtime/.venv` 中创建虚拟环境，优先复用 Node.js 20+、Python 3.10–3.13 和已有的 `uv`。在支持的 x64 / arm64 macOS 和 glibc Linux 上，缺少工具时会校验并下载 Node.js 或 uv 到插件运行目录，再按需准备 Python 3.12。首次运行 BabelDOC 还会从镜像下载约 340 MB 的版面模型与字体到 `~/.cache/babeldoc`。
 
-PDFMathTranslate-next/BabelDOC 使用 AGPL 许可证，因此它由用户主动下载并作为独立外部引擎运行，MIT 插件不会捆绑或链接其代码。关于调用协议、隐私边界、许可证边界和验收标准，请参阅[保排版 PDF 工作流](docs/PDF_PRESERVATION_WORKFLOW.md)。
+PDFMathTranslate-next/BabelDOC 使用 AGPL 许可证，因此它由用户主动下载并作为独立外部引擎运行，MIT 插件不会捆绑或链接其代码。关于调用协议、隐私边界、许可证边界和验收标准，请参阅[保排版 PDF 工作流](https://github.com/fangchenghao/codex-bilingual-reader/blob/main/docs/PDF_PRESERVATION_WORKFLOW.md)。
 
 ### 使用入口与设置
 
@@ -69,9 +71,13 @@ PDFMathTranslate-next/BabelDOC 使用 AGPL 许可证，因此它由用户主动�
 - **默认打开附件**：可选择双击论文时优先打开双语 PDF，或保持 Zotero 默认打开原始 PDF 的行为。
 - **测试连接**：验证保排版启动器，并通过所选后端翻译一个最小测试句，不会发送论文正文。
 
+### 跨页句子的翻译
+
+保排版模式使用 BabelDOC 识别的正文阅读顺序。对于引擎配对的跨页或跨栏段落，模型会看到前后片段的原文摘录，每个片段的译文按段落编号放回原位。分批、断点续传和单段重试都使用相同的上下文。升级后首次重译会重新请求旧版缓存中的片段。复杂版面中误识别的页眉、脚注或正文仍可能影响衔接。
+
 ### 典型处理时间
 
-翻译速度取决于 PDF 排版复杂度、网络延迟、模型服务和并发限制。以 DeepSeek API 为例，普通 8 页学术 PDF 通常约需 10 分钟。公式、表格、双栏排版较多或服务繁忙时可能更久；该数值是经验参考，不是性能保证。
+翻译速度取决于 PDF 排版复杂度、网络延迟、模型服务和并发限制。在 1.5.x 的 DeepSeek API 测试中，普通 8 页学术 PDF 约需 10 分钟。公式、表格、双栏排版较多或服务繁忙时可能更久；该数值是经验参考，不是性能保证。
 
 ### 安全与隐私
 
@@ -83,7 +89,7 @@ PDFMathTranslate-next/BabelDOC 使用 AGPL 许可证，因此它由用户主动�
 
 - 扫描型 PDF 不会由本插件执行 OCR，请先在 Zotero 或其他工具中完成 OCR。
 - 保排版 PDF 需要单独安装 PDFMathTranslate-next，并具备可用的 Codex CLI 登录或 OpenAI 兼容 API 配置。
-- macOS/Linux 需要 Python 3.10–3.13（本机 Python 3.14 暂时不受 `pdf2zh_next` 支持）或 `uv`；未设置 `HF_ENDPOINT` 时会默认使用 `https://hf-mirror.com` 下载 BabelDOC 模型，若你的网络无法访问该镜像，请自行设置 `HF_ENDPOINT`。
+- PDF 引擎需要 Python 3.10–3.13，由安装器负责查找或准备。未设置 `HF_ENDPOINT` 时会默认使用 `https://hf-mirror.com` 下载 BabelDOC 模型，若你的网络无法访问该镜像，请自行设置 `HF_ENDPOINT`。
 - 只有 API 服务返回标准 `usage` 对象时才能显示精确 Token 用量；Codex CLI 当前不提供权威 Token 统计。
 - Zotero 全文缓存没有稳定的“段落到 PDF 坐标”映射，因此当前版本无法从双语内容精确跳转回 PDF 中的对应位置。
 - Codex App Server 依赖有效的 `~/.codex/config.toml`；若出现 TOML 解析错误，需要先修复提示的配置行。
@@ -140,7 +146,7 @@ Codex Bilingual Reader is an MIT-licensed plugin for Zotero 8/9/10. It converts 
 
 ### Preview
 
-![ActPlan-1K preserved-layout English-Chinese PDF](docs/assets/actplan-bilingual-preview.png)
+![ActPlan-1K preserved-layout English-Chinese PDF](https://raw.githubusercontent.com/fangchenghao/codex-bilingual-reader/main/docs/assets/actplan-bilingual-preview.png)
 
 English is preserved on the left and the translated, selectable Chinese page is placed on the right while figures, formulas, tables, and page geometry remain intact.
 
@@ -151,16 +157,18 @@ English is preserved on the left and the translated, selectable Chinese page is 
 3. Open **Tools → Codex 中英对照设置…** and click **一键安装/修复 PDF 翻译环境**. On Windows this downloads and extracts the official portable engine (about 600 MB); on macOS/Linux it creates a Python virtual environment in the add-on runtime directory and installs `pdf2zh_next` / `BabelDOC` (about 900 MB). Either path normally takes a few minutes.
 4. Select the locally authenticated Codex CLI or an OpenAI-compatible API, configure the model and credentials, and run **Test connection** before translating a paper.
 
+To download the release through npm, run `npm pack codex-bilingual-reader-for-zotero`. Extract the resulting `.tgz` and select `package/build/codex-bilingual-reader.xpi` in step 2.
+
 ### Preserved-layout PDF setup
 
-After one-click setup, the plugin fills the launcher, PDFMathTranslate, and Node paths and runs a local preflight. Regular users no longer need to clone this repository. Existing development environments and custom installations can still use **高级：选择已有工作目录…** or enter paths manually.
+Settings checks the local runtime and shows each installation stage. Paths are saved after preflight succeeds. Expand **高级设置 · 查看或更改路径** to select an existing workspace or edit paths. Updating the XPI refreshes the managed launcher scripts on the next use.
 
 Platform support:
 
 - **Windows**: one-click setup downloads the official portable bundle and verifies it with SHA-256; a portable Node.js is installed as well when none is present.
-- **macOS / Linux**: one-click setup creates a virtual environment at `codex-bilingual-runtime/.venv` and needs Python 3.10–3.13 or [uv](https://docs.astral.sh/uv/) (uv is used to provision Python 3.12 when available). The first run also downloads about 340 MB of BabelDOC layout models and fonts into `~/.cache/babeldoc`.
+- **macOS / Linux**: one-click setup creates a virtual environment at `codex-bilingual-runtime/.venv` and reuses available Node.js 20+, Python 3.10–3.13, and uv installations. On x64 / arm64 macOS and glibc Linux, the installer can download checksum-verified Node.js and uv into the runtime and provision Python 3.12 as needed. The first run also downloads about 340 MB of BabelDOC layout models and fonts into `~/.cache/babeldoc`.
 
-PDFMathTranslate-next/BabelDOC is downloaded on explicit user action and runs as a separate external AGPL engine; it is not bundled or linked into the MIT plugin. See [the preserved PDF workflow](docs/PDF_PRESERVATION_WORKFLOW.md) for provider contracts, privacy boundaries, license boundaries, and acceptance gates.
+PDFMathTranslate-next/BabelDOC is downloaded on explicit user action and runs as a separate external AGPL engine; it is not bundled or linked into the MIT plugin. See [the preserved PDF workflow](https://github.com/fangchenghao/codex-bilingual-reader/blob/main/docs/PDF_PRESERVATION_WORKFLOW.md) for provider contracts, privacy boundaries, license boundaries, and acceptance gates.
 
 ### Entry points and settings
 
@@ -176,9 +184,13 @@ Open settings through **Edit → Settings → Codex 中英对照**, **Tools → 
 - **Default open attachment** — chooses whether double-clicking a paper prefers its bilingual PDF or retains Zotero's original-PDF behavior.
 - **Test connection** — validates the preserved-PDF launcher and translates one minimal test sentence through the selected backend without sending a document.
 
+### Sentences spanning pages
+
+When BabelDOC identifies adjacent body paragraphs across a page or column break, each translation receives short excerpts from its neighbors. The broker preserves that context across batches and retries and maps each translation to its original paragraph ID. The first translation after upgrading requests fresh translations for fragments cached by older versions. Reading order depends on the layout engine correctly identifying body text.
+
 ### Typical processing time
 
-Translation time depends on PDF layout complexity, network latency, model availability, and provider rate limits. As a practical reference, an ordinary eight-page academic PDF typically takes about ten minutes with the DeepSeek API. Formula-heavy, table-heavy, multi-column documents or provider congestion may take longer; this is an observed estimate, not a performance guarantee.
+Translation time depends on PDF layout complexity, network latency, model availability, and provider rate limits. In a 1.5.x test, an eight-page academic PDF took about ten minutes with the DeepSeek API. Formula-heavy, table-heavy, multi-column documents or provider congestion may take longer; this is an observed estimate, not a performance guarantee.
 
 ### Security and privacy
 
@@ -190,7 +202,7 @@ On Windows, the launcher sends document fragments through stdin to the configure
 
 - Scanned PDFs are not OCRed by this plugin. Run OCR in Zotero or another tool first.
 - Preserved PDF output requires a separately installed PDFMathTranslate-next engine and either a valid Codex CLI login or a working OpenAI-compatible API configuration.
-- macOS/Linux need Python 3.10–3.13 (`pdf2zh_next` does not support 3.14 yet) or `uv`. When `HF_ENDPOINT` is unset the launcher defaults to `https://hf-mirror.com` for BabelDOC model downloads; override it if that mirror is unreachable from your network.
+- The runtime needs Python 3.10–3.13. Setup finds or provisions a compatible interpreter. When `HF_ENDPOINT` is unset the launcher defaults to `https://hf-mirror.com` for BabelDOC model downloads; override it if that mirror is unreachable from your network.
 - Exact token usage is displayed only when an API provider returns a standard `usage` object. Codex CLI tasks do not currently expose authoritative token counts.
 - Zotero's full-text cache does not retain a robust paragraph-to-PDF coordinate map, so the current version cannot jump from bilingual content to the exact corresponding PDF location.
 - The Codex App Server requires a valid `~/.codex/config.toml`. Fix the reported configuration line before retrying if a TOML parse error occurs.
